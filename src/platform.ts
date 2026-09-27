@@ -1,4 +1,4 @@
-const isMac = navigator.userAgent.includes("Mac");
+export const isMac = navigator.userAgent.includes("Mac");
 const isWindows = navigator.userAgent.includes("Windows");
 
 /** ⌘ on macOS, Ctrl elsewhere. */

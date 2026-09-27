@@ -38,15 +38,51 @@ Requires Rust, Node 22+, pnpm, and the [Tauri prerequisites](https://tauri.app/s
 
 **Images:** paste an image (e.g. a screenshot) or drop image files onto the window, and markd stores them in an `assets/` folder next to the document and inserts a relative link such as `![](assets/image-20260927-161305.png)`. Existing names are never overwritten (`-1`, `-2`, ... are appended), and images already in `assets/` are linked rather than copied. An untitled document is saved first so the images have somewhere to go.
 
+## Plugins
+
+Features are built as plugins on a small core. The core owns documents, files, the sidebar and the editor; everything else, including the built-in live rendering, images and word count, is a plugin written against the API in [`src/plugins/api.ts`](src/plugins/api.ts). New features are added the same way.
+
+```ts
+import type { MarkdPlugin } from "./plugins/api";
+
+export const example: MarkdPlugin = {
+  id: "example.hello",
+  name: "Hello",
+  activate(app) {
+    app.commands.add({ id: "hello.say", title: "Say Hello", key: "Mod-Shift-h", run: () => app.workspace.setStatus("Hello") });
+    app.render.node("StrongEmphasis", (node, ctx) => ctx.mark(node.from, node.to, "my-bold"));
+    app.events.on("doc-saved", (doc) => console.log("saved", doc.path));
+  },
+};
+```
+
+| API | What it is for |
+|---|---|
+| `commands.add` | Commands with optional key bindings (`Mod-Shift-o`; `Mod` is ⌘ on macOS, Ctrl elsewhere) |
+| `markdown.addSyntax` | Extend the parser with a [`@lezer/markdown`](https://github.com/lezer-parser/markdown) extension, e.g. `$math$` or `[[wiki links]]` |
+| `render.node` | Render syntax nodes in live mode: hide markup, add classes, replace ranges with widgets |
+| `editor.addExtension` | Any CodeMirror extension: themes, keymaps, DOM event handlers, view plugins |
+| `statusBar.add` | An element in the status bar |
+| `events.on` | `doc-opened`, `doc-changed`, `doc-saved`, `folder-opened` |
+| `workspace` | The open document, `ensureSaved()`, status messages |
+
+Everything a plugin registers is undone when it is deactivated, and errors thrown by a plugin's renderers or listeners are reported in the status bar instead of breaking the editor.
+
+Built-in plugins live in `src/plugins/builtin/`: basic formatting, lists and tasks, code blocks, tables, images, and word count.
+
+Loading third-party plugins from a plugins folder is the next step. Plugins will run with the same privileges as the app itself (like Obsidian's), so the backend's folder-scoped path checks stay the security boundary.
+
 ## Layout
 
 ```
 src/
-  main.ts           document state, shortcuts, external changes, close confirmation
+  main.ts           core: document state, commands, external changes, close confirmation
   editor.ts         CodeMirror 6 setup, theme, highlighting, mode switching
-  live-preview.ts   live rendering: hide markup, style content, swap in widgets from the syntax tree
-  widgets.ts        image / bullet / checkbox widgets and image path resolution
-  images.ts         paste / drop images and insert links
+  live-preview.ts   live rendering engine: walks the syntax tree and calls plugin node renderers
+  plugins/
+    api.ts          the plugin API (types)
+    host.ts         loads plugins, collects their contributions, isolates their errors
+    builtin/        built-in features, one plugin each
   sidebar.ts        folder tree, context menu, inline rename, resizing
   platform.ts       platform helpers (⌘ vs Ctrl, "Reveal in Finder" label)
   api.ts            typed wrappers for backend commands
@@ -70,6 +106,7 @@ src-tauri/src/
 
 ## Roadmap
 
+- [ ] Load third-party plugins from a plugins folder, with enable / disable and a safe mode
 - [ ] Render tables as real table widgets (needs block decorations from a StateField)
 - [ ] Math (KaTeX) and Mermaid diagrams, loaded on demand
 - [ ] Drag and drop to move files in the sidebar; search across the folder

@@ -1,8 +1,6 @@
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
-import { languages } from "@codemirror/language-data";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import {
@@ -14,7 +12,7 @@ import {
   placeholder,
 } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
-import { baseDir, livePreview, openLinkOnModClick } from "./live-preview";
+import { baseDir, livePreview } from "./live-preview";
 
 /** live: rendered in place inside the editor; source: plain markdown source. */
 export type Mode = "live" | "source";
@@ -53,8 +51,8 @@ const theme = EditorView.theme({
 export interface EditorOptions {
   mode: Mode;
   onChange: () => void;
-  /** Extra extensions, kept across document loads. */
-  extensions?: Extension[];
+  /** Extra extensions (plugin contributions), included in every document's state. */
+  extensions?: () => Extension;
 }
 
 export function createEditor(parent: HTMLElement, opts: EditorOptions) {
@@ -73,17 +71,15 @@ export function createEditor(parent: HTMLElement, opts: EditorOptions) {
     highlightSelectionMatches(),
     EditorView.lineWrapping,
     keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),
-    markdown({ base: markdownLanguage, codeLanguages: languages }),
     syntaxHighlighting(highlight),
     theme,
-    openLinkOnModClick,
     placeholder("⌘/Ctrl+O open  ·  ⌘/Ctrl+S save  ·  ⌘/Ctrl+\\ toggle source mode"),
     modeSlot.of(modeExtension(mode)),
     dirSlot.of(baseDir.of(dir)),
     EditorView.updateListener.of((u) => {
       if (u.docChanged) opts.onChange();
     }),
-    opts.extensions ?? [],
+    opts.extensions?.() ?? [],
   ];
 
   const view = new EditorView({

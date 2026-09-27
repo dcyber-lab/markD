@@ -4,35 +4,43 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { backend, type DocInfo } from "./api";
 import { createEditor, type Mode } from "./editor";
-import { imagePaste, listenForDroppedImages, type ImageOptions } from "./images";
-import { hasModKey } from "./platform";
+import type { Command } from "./plugins/api";
+import { builtinPlugins } from "./plugins/builtin";
+import { PluginHost } from "./plugins/host";
 import { Sidebar } from "./sidebar";
 
 const appWindow = getCurrentWindow();
-const workspace = document.querySelector<HTMLElement>("#workspace")!;
+const workspaceEl = document.querySelector<HTMLElement>("#workspace")!;
 const statusEl = document.querySelector<HTMLElement>("#status")!;
-const countEl = document.querySelector<HTMLElement>("#word-count")!;
 const modeButton = document.querySelector<HTMLButtonElement>("#mode-toggle")!;
 const sidebarButton = document.querySelector<HTMLButtonElement>("#sidebar-toggle")!;
 
 const MODE_KEY = "markd.mode";
-const COUNT_DELAY_MS = 300;
 
 let doc: DocInfo | null = null;
 let mode: Mode = readMode();
-let countTimer: number | undefined;
 let windowTitle = "";
 
-const imageOptions: ImageOptions = { ensureSaved, run };
+// Plugins start before the editor exists so their contributions are part of its first state.
+const host = new PluginHost(document.querySelector<HTMLElement>("#status-items")!, {
+  get doc() {
+    return doc;
+  },
+  ensureSaved,
+  setStatus,
+  run,
+});
+for (const plugin of builtinPlugins) host.activate(plugin);
+
 const editor = createEditor(document.querySelector<HTMLElement>("#editor")!, {
   mode,
   onChange() {
     refreshTitle();
-    clearTimeout(countTimer);
-    countTimer = window.setTimeout(refreshCount, COUNT_DELAY_MS);
+    host.emit("doc-changed", undefined);
   },
-  extensions: [imagePaste(imageOptions)],
+  extensions: () => host.extension(),
 });
+host.attach(editor.view);
 /** Content matching what is on disk, used to detect unsaved changes. */
 let savedDoc: Text = editor.view.state.doc;
 
@@ -76,31 +84,19 @@ function refreshTitle() {
   void appWindow.setTitle(title);
 }
 
-function countWords(text: string): number {
-  const cjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu;
-  const han = text.match(cjk)?.length ?? 0;
-  const words = text.replace(cjk, " ").match(/[\p{L}\p{N}]+/gu)?.length ?? 0;
-  return han + words;
-}
-
-function refreshCount() {
-  clearTimeout(countTimer);
-  countEl.textContent = `${countWords(editor.text())} words`;
-}
-
 function load(info: DocInfo | null) {
   doc = info;
   editor.load(info?.content ?? "", info?.dir ?? null);
   savedDoc = editor.view.state.doc;
   sidebar.setActive(info?.path ?? null);
   refreshTitle();
-  refreshCount();
+  host.emit("doc-opened", info);
   editor.focus();
 }
 
 function setMode(next: Mode) {
   mode = next;
-  workspace.dataset.mode = next;
+  workspaceEl.dataset.mode = next;
   modeButton.textContent = next === "live" ? "Live" : "Source";
   editor.setMode(next);
   try {
@@ -123,7 +119,7 @@ async function leaveCurrent(): Promise<boolean> {
   return true;
 }
 
-/** Images are stored next to the document, so an untitled one has to be saved first. */
+/** Some features store files next to the document, so an untitled one has to be saved first. */
 async function ensureSaved(): Promise<boolean> {
   if (doc) return true;
   setStatus("Save the document first; images are stored next to it in ./assets");
@@ -155,6 +151,7 @@ const commands = {
     if (!folder) return;
     sidebar.show();
     await sidebar.setFolder(folder);
+    host.emit("folder-opened", folder);
     setStatus(`Opened folder ${folder.root}`);
   },
 
@@ -165,6 +162,7 @@ const commands = {
     await backend.saveFile(snapshot.toString());
     savedDoc = snapshot;
     refreshTitle();
+    host.emit("doc-saved", doc);
     setStatus(`Saved ${doc.path}`);
   },
 
@@ -178,6 +176,7 @@ const commands = {
     savedDoc = snapshot;
     sidebar.setActive(info.path);
     refreshTitle();
+    host.emit("doc-saved", info);
     setStatus(`Saved ${info.path}`);
     return true;
   },
@@ -191,23 +190,23 @@ const commands = {
   },
 };
 
-function run(command: () => Promise<unknown>) {
-  command().catch((e) => setStatus(String(e), "error"));
+const coreCommands: Command[] = [
+  { id: "file.new", title: "New File", key: "Mod-n", run: commands.newFile },
+  { id: "file.open", title: "Open File…", key: "Mod-o", run: commands.open },
+  { id: "folder.open", title: "Open Folder…", key: "Mod-Shift-o", run: commands.openFolder },
+  { id: "file.save", title: "Save", key: "Mod-s", run: commands.save },
+  { id: "file.save-as", title: "Save As…", key: "Mod-Shift-s", run: commands.saveAs },
+  { id: "view.toggle-source", title: "Toggle Source Mode", key: "Mod-\\", run: commands.toggleMode },
+  { id: "view.toggle-sidebar", title: "Toggle Sidebar", key: "Mod-Shift-e", run: commands.toggleSidebar },
+];
+for (const command of coreCommands) host.addCommand(command);
+
+function run(task: () => Promise<unknown>) {
+  task().catch((e) => setStatus(String(e), "error"));
 }
 
 window.addEventListener("keydown", (e) => {
-  if (!hasModKey(e) || e.altKey) return;
-  const key = e.key.toLowerCase();
-  const command =
-    key === "n" ? commands.newFile
-    : key === "o" ? (e.shiftKey ? commands.openFolder : commands.open)
-    : key === "s" ? (e.shiftKey ? commands.saveAs : commands.save)
-    : key === "e" && e.shiftKey ? commands.toggleSidebar
-    : key === "\\" ? commands.toggleMode
-    : null;
-  if (!command) return;
-  e.preventDefault();
-  run(command);
+  if (host.handleKey(e)) e.preventDefault();
 });
 
 modeButton.addEventListener("click", () => run(commands.toggleMode));
@@ -221,12 +220,10 @@ void listen<string>("file-changed", ({ payload }) => {
   editor.replace(payload);
   savedDoc = editor.view.state.doc;
   refreshTitle();
-  refreshCount();
   setStatus("File changed on disk and was reloaded");
 });
 
 void listen("tree-changed", () => run(() => sidebar.refresh()));
-void listenForDroppedImages(editor.view, imageOptions);
 
 void appWindow.onCloseRequested(async (e) => {
   if (!(await confirmDiscard())) e.preventDefault();
@@ -236,5 +233,6 @@ setMode(mode);
 run(async () => {
   const initial = await backend.initialState();
   await sidebar.setFolder(initial.folder);
+  host.emit("folder-opened", initial.folder);
   load(initial.doc);
 });
