@@ -16,6 +16,27 @@ pnpm tauri build                 # build an installer for the current platform
 
 Requires Rust, Node 22+, pnpm, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your platform.
 
+## Releasing
+
+Push a version tag:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) then creates a draft release with generated notes, builds the installers, uploads them, and publishes the release once every platform has succeeded:
+
+| Platform | Installers |
+|---|---|
+| macOS (universal: Apple Silicon + Intel) | `.dmg`, `.app.tar.gz` |
+| Windows | `.msi`, `-setup.exe` |
+| Linux (built on Ubuntu 22.04) | `.deb`, `.rpm`, `.AppImage` |
+
+- The app version comes from the tag, so there is nothing to bump in the code. Tags must be plain `vX.Y.Z` because Windows installers only accept numeric versions.
+- If a platform fails, the release stays a draft. Re-running the failed jobs uploads to the same draft.
+- Builds are not signed with a paid certificate yet. On macOS the app is ad-hoc signed, so the first launch needs right-click → Open (or System Settings → Privacy & Security → Open Anyway); on Windows, SmartScreen asks for confirmation. Apple notarization and Windows code signing can be added later through repository secrets.
+
 ## Shortcuts
 
 | Shortcut | Action |

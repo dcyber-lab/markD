@@ -1,0 +1,117 @@
+name: Release
+
+# Push a tag like v1.2.3 to build installers for macOS, Windows and Linux and publish them as a
+# GitHub release. The app version comes from the tag, so there is nothing to bump by hand.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  create-release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    outputs:
+      release-id: ${{ steps.release.outputs.id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # Windows installers (MSI) only accept numeric versions, so no suffixes like -beta.1.
+      - name: Check the tag is a plain version (vX.Y.Z)
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tags must look like v1.2.3, got $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      # The release stays a draft until every platform has uploaded its installers.
+      # Re-running a failed workflow reuses the existing draft.
+      - name: Create the draft release
+        id: release
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes --title "markd $GITHUB_REF_NAME"
+          echo "id=$(gh release view "$GITHUB_REF_NAME" --json databaseId --jq .databaseId)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS universal
+            runner: macos-latest
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          # Built on the oldest supported Ubuntu so the binaries run on more distributions (glibc).
+          - name: Linux
+            runner: ubuntu-22.04
+          - name: Windows
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Use the tag as the app version
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const file = "src-tauri/tauri.conf.json";
+            const config = JSON.parse(fs.readFileSync(file, "utf8"));
+            config.version = process.argv[1];
+            fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
+          ' "${GITHUB_REF_NAME#v}"
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release-id }}
+          args: ${{ matrix.args }}
+
+  publish:
+    name: Publish release
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Publish the draft
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
