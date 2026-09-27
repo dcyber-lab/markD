@@ -50,6 +50,7 @@ git push origin v0.2.0
 | ⌘/Ctrl + \ | Toggle live rendering / source mode |
 | ⌘/Ctrl + F | Find and replace |
 | ⌘/Ctrl + , | Settings |
+| ⌘/Ctrl + = / − | Zoom in / out |
 | ⌘/Ctrl + click a link | Web links open in the browser, `#heading` scrolls to it, relative links to Markdown files in the open folder open in markd |
 
 ## Features
@@ -64,6 +65,8 @@ git push origin v0.2.0
 - **Emoji:** GitHub shortcodes such as `:rocket:`.
 
 Anything that cannot be rendered stays as written: a formula KaTeX rejects (underlined), a diagram Mermaid cannot parse, a reference to an undefined label, an unknown emoji name. KaTeX, Mermaid and the emoji list load the first time a document needs them.
+
+**Appearance:** Settings → Appearance sets the theme (follow the system, light or dark), the text and code fonts, font size, line height and text width. Changes apply as you make them and are kept per machine.
 
 **Folder sidebar:** open a folder to browse its subfolders and Markdown files (hidden entries are skipped; folders load lazily as you expand them). Right-click for New File, New Folder, Rename (inline), Move to Trash, and Reveal in Finder / Explorer. The tree follows changes made on disk, and the last folder, expanded folders, and sidebar width are restored on the next launch. Switching files from the sidebar saves unsaved changes first; an untitled document asks before discarding.
 

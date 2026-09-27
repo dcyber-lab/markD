@@ -32,11 +32,17 @@
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Cascadia Mono", "Noto Sans Mono CJK SC", monospace;
   --font-editor: var(--font-text);
 
+  /* Editor text; Settings → Appearance overrides these on #workspace. */
+  --editor-font-size: 15px;
+  --editor-line-height: 1.75;
+  --editor-width: 820px;
+
   color-scheme: light dark;
 }
 
+/* Dark colors: from the system unless Settings → Appearance picks a theme (data-theme on <html>). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #1b1d21;
     --bg-subtle: #22252a;
     --fg: #d7dae0;
@@ -65,6 +71,41 @@
     --alert-warning: #d29922;
     --alert-caution: #f85149;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #1b1d21;
+  --bg-subtle: #22252a;
+  --fg: #d7dae0;
+  --muted: #7d838d;
+  --border: #33373e;
+  --heading: #eef0f3;
+  --accent: #6ea1ff;
+  --link: #6ea1ff;
+  --code: #f08aa6;
+  --code-bg: #25282e;
+  --active-line: rgba(110, 161, 255, 0.06);
+  --selection: rgba(110, 161, 255, 0.25);
+  --hover: rgba(255, 255, 255, 0.06);
+  --error: #ff7b72;
+
+  --syn-keyword: #c39bff;
+  --syn-string: #7ed59a;
+  --syn-number: #f0a45d;
+  --syn-fn: #6ea1ff;
+  --syn-type: #e3c16f;
+
+  --highlight: #5c4d12;
+  --alert-note: #4493f8;
+  --alert-tip: #3fb950;
+  --alert-important: #ab7df8;
+  --alert-warning: #d29922;
+  --alert-caution: #f85149;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 * {
@@ -97,6 +138,8 @@ body {
 #workspace {
   flex: 1;
   min-width: 0;
+  /* Declared again here so fonts set on #workspace by the appearance settings take effect. */
+  --font-editor: var(--font-text);
 }
 
 #workspace[data-mode="source"] {
@@ -105,11 +148,12 @@ body {
 
 #editor {
   height: 100%;
+  font-size: var(--editor-font-size);
 }
 
 /* Center the text and cap the line length so it reads like a document, not code */
 #editor .cm-content {
-  max-width: 820px;
+  max-width: var(--editor-width);
   margin: 0 auto;
 }
 
@@ -387,6 +431,7 @@ body {
 }
 
 .settings-field input,
+.settings-field select,
 .settings-body button {
   font: inherit;
   color: var(--fg);
@@ -395,11 +440,13 @@ body {
   background: var(--bg);
 }
 
-.settings-field input {
+.settings-field input,
+.settings-field select {
   padding: 6px 8px;
 }
 
-.settings-field input:focus {
+.settings-field input:focus,
+.settings-field select:focus {
   outline: none;
   border-color: var(--accent);
 }

@@ -3,26 +3,33 @@ import type { MarkdPlugin, PluginApp } from "../api";
 
 // ```mermaid code blocks render as diagrams. Mermaid is large, so it loads on first use, and it
 // renders asynchronously: a diagram shows as source until it is ready, and stays source if Mermaid
-// cannot parse it. Strict security mode sanitizes the SVG it returns.
+// cannot parse it. Strict security mode sanitizes the SVG it returns. Diagrams follow the light or
+// dark theme, and render again when it changes.
 
 type Mermaid = typeof import("mermaid").default;
 
 let mermaid: Promise<Mermaid> | null = null;
+let mermaidTheme = "";
 
-function loadMermaid(): Promise<Mermaid> {
-  mermaid ??= import("mermaid").then(({ default: m }) => {
-    m.initialize({
-      startOnLoad: false,
-      securityLevel: "strict",
-      suppressErrorRendering: true,
-      theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default",
-    });
-    return m;
-  });
-  return mermaid;
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+
+/** Mermaid's theme for the app's current colors: a theme picked in Settings, else the system's. */
+function currentTheme(): "dark" | "default" {
+  const picked = document.documentElement.dataset.theme;
+  return (picked ? picked === "dark" : darkQuery.matches) ? "dark" : "default";
 }
 
-/** Rendered diagrams by source. Failures are remembered so broken diagrams are not retried. */
+async function loadMermaid(theme: "dark" | "default"): Promise<Mermaid> {
+  mermaid ??= import("mermaid").then(({ default: m }) => m);
+  const m = await mermaid;
+  if (theme !== mermaidTheme) {
+    m.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true, theme });
+    mermaidTheme = theme;
+  }
+  return m;
+}
+
+/** Rendered diagrams by theme and source. Failures are remembered so broken diagrams are not retried. */
 const diagrams = new Map<string, { svg: string } | { error: string }>();
 
 /** Sources waiting to render. While typing in a diagram each keystroke asks for a new version, so
@@ -31,31 +38,33 @@ let wanted = new Set<string>();
 let timer: number | undefined;
 let seq = 0;
 
-function request(app: PluginApp, code: string) {
-  wanted.add(code);
+function request(app: PluginApp, key: string) {
+  wanted.add(key);
   clearTimeout(timer);
   timer = window.setTimeout(() => void renderWanted(app), 300);
 }
 
 async function renderWanted(app: PluginApp) {
   const doc = app.editor.view.state.doc.toString();
-  const codes = [...wanted].filter((code) => !diagrams.has(code) && doc.includes(code));
+  const theme = currentTheme();
+  // Only versions still in the document, for the theme in use now.
+  const keys = [...wanted].filter((key) => !diagrams.has(key) && key.startsWith(`${theme}\n`) && doc.includes(codeOf(key)));
   wanted = new Set();
-  if (codes.length === 0) return;
+  if (keys.length === 0) return;
   let m: Mermaid;
   try {
-    m = await loadMermaid();
+    m = await loadMermaid(theme);
   } catch (e) {
     app.workspace.setStatus(`Diagrams unavailable: ${e}`, "error");
-    for (const code of codes) diagrams.set(code, { error: String(e) });
+    for (const key of keys) diagrams.set(key, { error: String(e) });
     return;
   }
-  for (const code of codes) {
+  for (const key of keys) {
     const id = `markd-mermaid-${++seq}`;
     try {
-      diagrams.set(code, { svg: (await m.render(id, code)).svg });
+      diagrams.set(key, { svg: (await m.render(id, codeOf(key))).svg });
     } catch (e) {
-      diagrams.set(code, { error: String(e) });
+      diagrams.set(key, { error: String(e) });
     } finally {
       // Mermaid renders in a temporary element; make sure none is left behind after an error.
       document.getElementById(id)?.remove();
@@ -65,6 +74,8 @@ async function renderWanted(app: PluginApp) {
   while (diagrams.size > 100) diagrams.delete(diagrams.keys().next().value!);
   app.render.refresh();
 }
+
+const codeOf = (key: string) => key.slice(key.indexOf("\n") + 1);
 
 /** A rendered diagram. A click puts the cursor in its source; `offset` is where, from its start. */
 class DiagramWidget extends WidgetType {
@@ -105,15 +116,20 @@ export const mermaidDiagrams: MarkdPlugin = {
   activate(app) {
     app.editor.addExtension(theme);
 
+    // Re-render in the new colors when the theme changes, from Settings or the system.
+    const refresh = () => app.render.refresh();
+    darkQuery.addEventListener("change", refresh);
+    new MutationObserver(refresh).observe(document.documentElement, { attributeFilter: ["data-theme"] });
+
     app.render.block("FencedCode", (node, state) => {
       const info = node.node.getChild("CodeInfo");
       if (!info || state.sliceDoc(info.from, info.to).trim().toLowerCase() !== "mermaid") return null;
       const text = node.node.getChild("CodeText");
       if (!text) return null;
-      const code = state.sliceDoc(text.from, text.to);
-      const diagram = diagrams.get(code);
+      const key = `${currentTheme()}\n${state.sliceDoc(text.from, text.to)}`;
+      const diagram = diagrams.get(key);
       if (!diagram) {
-        request(app, code);
+        request(app, key);
         return null;
       }
       return "svg" in diagram ? new DiagramWidget(diagram.svg, text.from - node.from) : null;
