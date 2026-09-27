@@ -29,6 +29,7 @@ const host = new PluginHost(document.querySelector<HTMLElement>("#status-items")
     return doc;
   },
   ensureSaved,
+  open: openFromTree,
   setStatus,
   run,
 });

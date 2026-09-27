@@ -50,11 +50,20 @@ git push origin v0.2.0
 | ⌘/Ctrl + \ | Toggle live rendering / source mode |
 | ⌘/Ctrl + F | Find and replace |
 | ⌘/Ctrl + , | Settings |
-| ⌘/Ctrl + click a link | Open it in the system browser |
+| ⌘/Ctrl + click a link | Web links open in the browser, `#heading` scrolls to it, relative links to Markdown files in the open folder open in markd |
 
 ## Features
 
-**Live rendering:** headings, bold / italic / strikethrough, inline code, links, bullet lists, task lists (click to toggle), blockquotes, horizontal rules, fenced code blocks (with syntax highlighting), images (relative local paths or remote URLs), and tables. Tables render as real tables with column alignment and inline formatting in cells; clicking a cell, or moving the cursor into a table, shows its source. A table nested in a list or blockquote stays as source in a monospace font.
+**Live rendering:** headings (ATX and setext), bold / italic / strikethrough, `==highlight==`, `H~2~O` / `x^2^`, inline code, links (inline, reference-style and autolinks), escapes and HTML entities, bullet lists, task lists (click to toggle), blockquotes (nested), horizontal rules, code blocks (fenced with syntax highlighting, and indented), images (inline or reference-style; relative local paths or remote URLs), tables, footnotes, GitHub alerts, emoji shortcodes, math, and Mermaid diagrams.
+
+- **Tables** render as real tables with column alignment and inline formatting in cells; clicking a cell, or moving the cursor into a table, shows its source. A table nested in a list or blockquote stays as source in a monospace font.
+- **Math:** `$inline$` and `$$display$$` TeX, rendered with KaTeX. Prices like `$5 and $10` stay text (the closing `$` may not follow a space or precede a digit).
+- **Mermaid:** ` ```mermaid ` code blocks render as diagrams.
+- **Footnotes:** `text[^1]` with `[^1]: The note.` elsewhere show as numbers in order of first use; ⌘/Ctrl + click jumps between a reference and its note.
+- **GitHub alerts:** `> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` and `[!CAUTION]` blockquotes are colored by type; text after the marker (`> [!TIP] Title`) becomes the label.
+- **Emoji:** GitHub shortcodes such as `:rocket:`.
+
+Anything that cannot be rendered stays as written: a formula KaTeX rejects (underlined), a diagram Mermaid cannot parse, a reference to an undefined label, an unknown emoji name. KaTeX, Mermaid and the emoji list load the first time a document needs them.
 
 **Folder sidebar:** open a folder to browse its subfolders and Markdown files (hidden entries are skipped; folders load lazily as you expand them). Right-click for New File, New Folder, Rename (inline), Move to Trash, and Reveal in Finder / Explorer. The tree follows changes made on disk, and the last folder, expanded folders, and sidebar width are restored on the next launch. Switching files from the sidebar saves unsaved changes first; an untitled document asks before discarding.
 
@@ -101,7 +110,7 @@ export const example: MarkdPlugin = {
 
 Everything a plugin registers is undone when it is deactivated, and errors thrown by a plugin's renderers or listeners are reported in the status bar instead of breaking the editor.
 
-Built-in plugins live in `src/plugins/builtin/`: basic formatting, lists and tasks, code blocks, tables, front matter, images, S3 image storage, and word count.
+Built-in plugins live in `src/plugins/builtin/`: basic formatting, lists and tasks, code blocks, tables, alerts, footnotes, emoji, math, Mermaid diagrams, front matter, images, S3 image storage, and word count.
 
 Loading third-party plugins from a plugins folder is the next step. Plugins will run with the same privileges as the app itself (like Obsidian's), so the backend's folder-scoped path checks stay the security boundary.
 
@@ -132,7 +141,8 @@ src-tauri/src/
 ## Security
 
 - **The backend decides which paths are reachable.** Single files come from the command line or a system dialog, and the frontend only submits their content. Sidebar operations take paths from the frontend, but only inside the folder the user opened: every command resolves symlinks and `..` first and rejects anything outside that folder, and new names may not contain path separators.
-- Raw HTML in Markdown is not rendered (it stays visible as source), and image widgets only set `src`, so there is no HTML injection surface. The production build also enforces a CSP that blocks inline scripts and `eval`.
+- Raw HTML in Markdown is not rendered (it stays visible as source), and widgets build their DOM from text, so there is no HTML injection surface. The two exceptions insert generated markup: KaTeX output (KaTeX escapes its input, and with `trust` off it refuses commands like `\href`) and Mermaid SVG (rendered with `securityLevel: "strict"`, which sanitizes it with DOMPurify). The production build also enforces a CSP that blocks inline scripts and `eval`.
+- Following a relative link opens files only through the folder-scoped backend command, so links cannot reach files outside the open folder.
 - Local images are served through Tauri's asset protocol with an empty default scope; only the open folder and the open file's directory are allowed.
 - Pasted images reach the backend as bytes only, and dropped files are read from the OS drop event in Rust, so the frontend never names a source or destination path. Images always land in the open document's `assets/` folder, with the suggested name reduced to a plain file name with an image extension.
 - Deleting moves items to the system trash rather than removing them permanently.
@@ -147,7 +157,7 @@ src-tauri/src/
 
 - [ ] Load third-party plugins from a plugins folder, with enable / disable and a safe mode
 - [x] Render tables as real table widgets
-- [ ] Math (KaTeX) and Mermaid diagrams, loaded on demand
+- [x] Math (KaTeX) and Mermaid diagrams, loaded on demand
 - [ ] Drag and drop to move files in the sidebar; search across the folder
 - [ ] File associations and macOS "Open With" (`RunEvent::Opened`)
 - [ ] Export to HTML / PDF
