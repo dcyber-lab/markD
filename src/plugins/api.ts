@@ -51,6 +51,14 @@ export interface RenderContext {
  */
 export type NodeRenderer = (node: SyntaxNodeRef, ctx: RenderContext) => void | false;
 
+/**
+ * Renders a top-level block node (e.g. `"Table"`) as one widget that replaces all of its lines in
+ * live mode while the selection is outside them. Return null, or throw, to show the source instead.
+ * Blocks nested in lists or blockquotes are not offered, since their lines carry markup of the
+ * enclosing block.
+ */
+export type BlockRenderer = (node: SyntaxNodeRef, state: EditorState) => WidgetType | null;
+
 export interface EventMap {
   /** A document was opened, or a new untitled one started (`null`). */
   "doc-opened": DocInfo | null;
@@ -98,6 +106,8 @@ export interface PluginApp {
   render: {
     /** Render syntax nodes with these names (e.g. `"Image"`) in live mode. */
     node(names: string | string[], renderer: NodeRenderer): Disposable;
+    /** Render whole block nodes with these names as widgets in live mode. */
+    block(names: string | string[], renderer: BlockRenderer): Disposable;
     /** Re-render live mode, e.g. after a setting that renderers depend on changed. */
     refresh(): void;
   };

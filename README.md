@@ -54,7 +54,7 @@ git push origin v0.2.0
 
 ## Features
 
-**Live rendering:** headings, bold / italic / strikethrough, inline code, links, bullet lists, task lists (click to toggle), blockquotes, horizontal rules, fenced code blocks (with syntax highlighting), and images (relative local paths or remote URLs). Tables are currently only aligned with a monospace font.
+**Live rendering:** headings, bold / italic / strikethrough, inline code, links, bullet lists, task lists (click to toggle), blockquotes, horizontal rules, fenced code blocks (with syntax highlighting), images (relative local paths or remote URLs), and tables. Tables render as real tables with column alignment and inline formatting in cells; clicking a cell, or moving the cursor into a table, shows its source. A table nested in a list or blockquote stays as source in a monospace font.
 
 **Folder sidebar:** open a folder to browse its subfolders and Markdown files (hidden entries are skipped; folders load lazily as you expand them). Right-click for New File, New Folder, Rename (inline), Move to Trash, and Reveal in Finder / Explorer. The tree follows changes made on disk, and the last folder, expanded folders, and sidebar width are restored on the next launch. Switching files from the sidebar saves unsaved changes first; an untitled document asks before discarding.
 
@@ -91,6 +91,7 @@ export const example: MarkdPlugin = {
 | `commands.add` | Commands with optional key bindings (`Mod-Shift-o`; `Mod` is ⌘ on macOS, Ctrl elsewhere) |
 | `markdown.addSyntax` | Extend the parser with a [`@lezer/markdown`](https://github.com/lezer-parser/markdown) extension, e.g. `$math$` or `[[wiki links]]` |
 | `render.node`, `render.refresh` | Render syntax nodes in live mode: hide markup, add classes, replace ranges with widgets |
+| `render.block` | Replace a whole top-level block (e.g. a table) with one widget while the cursor is outside it; returning null keeps the source |
 | `editor.addExtension` | Any CodeMirror extension: themes, keymaps, DOM event handlers, view plugins |
 | `statusBar.add` | An element in the status bar |
 | `events.on` | `doc-opened`, `doc-changed`, `doc-saved`, `folder-opened` |
@@ -110,7 +111,7 @@ Loading third-party plugins from a plugins folder is the next step. Plugins will
 src/
   main.ts           core: document state, commands, external changes, close confirmation
   editor.ts         CodeMirror 6 setup, theme, highlighting, mode switching
-  live-preview.ts   live rendering engine: walks the syntax tree and calls plugin node renderers
+  live-preview.ts   live rendering engine: walks the syntax tree and calls plugin node and block renderers
   plugins/
     api.ts          the plugin API (types)
     host.ts         loads plugins, collects their contributions, isolates their errors
@@ -145,7 +146,7 @@ src-tauri/src/
 ## Roadmap
 
 - [ ] Load third-party plugins from a plugins folder, with enable / disable and a safe mode
-- [ ] Render tables as real table widgets (needs block decorations from a StateField)
+- [x] Render tables as real table widgets
 - [ ] Math (KaTeX) and Mermaid diagrams, loaded on demand
 - [ ] Drag and drop to move files in the sidebar; search across the folder
 - [ ] File associations and macOS "Open With" (`RunEvent::Opened`)
