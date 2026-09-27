@@ -1,3 +1,4 @@
+import { SearchCursor } from "@codemirror/search";
 import { EditorView, WidgetType } from "@codemirror/view";
 import type { MarkdPlugin, PluginApp } from "../api";
 
@@ -44,11 +45,15 @@ function request(app: PluginApp, key: string) {
   timer = window.setTimeout(() => void renderWanted(app), 300);
 }
 
+/** Whether `text` is in the document, searched in place (a huge document is not copied into one string). */
+function inDocument(app: PluginApp, text: string): boolean {
+  return !new SearchCursor(app.editor.view.state.doc, text).next().done;
+}
+
 async function renderWanted(app: PluginApp) {
-  const doc = app.editor.view.state.doc.toString();
   const theme = currentTheme();
   // Only versions still in the document, for the theme in use now.
-  const keys = [...wanted].filter((key) => !diagrams.has(key) && key.startsWith(`${theme}\n`) && doc.includes(codeOf(key)));
+  const keys = [...wanted].filter((key) => !diagrams.has(key) && key.startsWith(`${theme}\n`) && inDocument(app, codeOf(key)));
   wanted = new Set();
   if (keys.length === 0) return;
   let m: Mermaid;
