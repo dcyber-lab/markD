@@ -279,3 +279,8 @@ const blockKeys = Prec.high(
 );
 
 export const livePreview = [inlinePreview, blockPreview, blockKeys];
+
+/** Whether live rendering is on in `state` (its extensions are only present in live mode). */
+export function isLive(state: EditorState): boolean {
+  return state.field(blockPreview, false) !== undefined;
+}

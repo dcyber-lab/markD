@@ -103,6 +103,7 @@ export const example: MarkdPlugin = {
 | `commands.add` | Commands with optional key bindings (`Mod-Shift-o`; `Mod` is ⌘ on macOS, Ctrl elsewhere) |
 | `markdown.addSyntax` | Extend the parser with a [`@lezer/markdown`](https://github.com/lezer-parser/markdown) extension, e.g. `$math$` or `[[wiki links]]` |
 | `render.node`, `render.refresh` | Render syntax nodes in live mode: hide markup, add classes, replace ranges with widgets |
+| `render.isLive` | Whether live rendering is on, for state that only renderers need (skip the work in source mode) |
 | `render.block` | Replace a whole top-level block (e.g. a table) with one widget while the cursor is outside it; returning null keeps the source |
 | `editor.addExtension` | Any CodeMirror extension: themes, keymaps, DOM event handlers, view plugins |
 | `statusBar.add` | An element in the status bar |
@@ -155,7 +156,7 @@ src-tauri/src/
 ## Known limitations
 
 - The open folder is watched recursively. That is cheap on macOS and Windows, but on Linux (inotify) a very large folder can hit the system's watch limit.
-- In very large files (tens of MB) the Markdown parser only runs a limited distance ahead of the visible text. After jumping far into such a file, live rendering appears once parsing catches up (for files of about 50 MB and more, it may not), and the text shows as source until then; editing is unaffected.
+- Files over about 20 MB open in source mode, with a note in the status bar; ⌘/Ctrl + \ still turns on live rendering for that file (the choice is not remembered). Live rendering is slower there, and the Markdown parser only runs a limited distance ahead of the visible text, so after jumping far into a very large file the text shows as source until parsing catches up (for files of about 50 MB and more, it may not).
 
 ## Roadmap
 

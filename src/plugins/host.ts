@@ -3,7 +3,7 @@ import { languages } from "@codemirror/language-data";
 import { Compartment, type Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { MarkdownConfig } from "@lezer/markdown";
-import { blockRenderers, nodeRenderers } from "../live-preview";
+import { blockRenderers, isLive, nodeRenderers } from "../live-preview";
 import { isMac } from "../platform";
 import {
   API_VERSION,
@@ -185,6 +185,7 @@ export class PluginHost {
         // A block renderer that throws leaves that block as source.
         block: (names, renderer) => track(this.addRenderer(this.blockRenderers, names, guard(renderer, null))),
         refresh: () => this.changed(),
+        isLive,
       },
       editor: {
         addExtension: (extension) => track(this.add(this.extensions, extension)),

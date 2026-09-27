@@ -111,6 +111,11 @@ export interface PluginApp {
     block(names: string | string[], renderer: BlockRenderer): Disposable;
     /** Re-render live mode, e.g. after a setting that renderers depend on changed. */
     refresh(): void;
+    /**
+     * Whether live rendering is on. State that only renderers use (a state field walking the whole
+     * document, say) can skip its work in source mode, which large documents open in.
+     */
+    isLive(state: EditorState): boolean;
   };
 
   editor: {

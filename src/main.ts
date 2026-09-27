@@ -19,8 +19,20 @@ const settingsButton = document.querySelector<HTMLButtonElement>("#settings-togg
 
 const MODE_KEY = "markd.mode";
 
+/**
+ * Documents larger than this (about 20 MB) open in source mode. Live rendering keeps work per
+ * edit that grows with the parsed text, and the parser only runs a limited distance ahead of the
+ * view, so far into such a file there would be nothing to render anyway.
+ */
+const LARGE_DOC_CHARS = 20 * 1024 * 1024;
+
 let doc: DocInfo | null = null;
-let mode: Mode = readMode();
+/** The mode the user chose, kept across sessions. */
+let preferredMode: Mode = readMode();
+/** The mode shown now; a large document shows source whatever the preference. */
+let mode: Mode = preferredMode;
+/** The open document is over LARGE_DOC_CHARS. */
+let largeDoc = false;
 let windowTitle = "";
 
 // Plugins start before the editor exists so their contributions are part of its first state.
@@ -75,6 +87,7 @@ function readMode(): Mode {
 const isDirty = () => !editor.view.state.doc.eq(savedDoc);
 
 function setStatus(message: string, kind: "info" | "error" = "info") {
+  delete statusEl.dataset.largeFile;
   statusEl.textContent = message;
   statusEl.dataset.kind = kind;
 }
@@ -91,19 +104,41 @@ function load(opened: OpenedDoc | null) {
   // Only the path and name are kept; the text lives in the editor.
   const info = opened && { path: opened.path, dir: opened.dir, name: opened.name };
   doc = info;
+  // Pick the mode before loading, so live rendering never starts on a large document.
+  largeDoc = (opened?.content.length ?? 0) > LARGE_DOC_CHARS;
+  const wanted = largeDoc ? "source" : preferredMode;
+  if (wanted !== mode) showMode(wanted);
+  modeButton.title = largeDoc
+    ? "Large file: opened in source mode. ⌘/Ctrl+\\ turns on live rendering (slower)"
+    : "⌘/Ctrl+\\";
   editor.load(opened?.content ?? "", info?.dir ?? null);
   savedDoc = editor.view.state.doc;
   sidebar.setActive(info?.path ?? null);
   refreshTitle();
   host.emit("doc-opened", info);
   editor.focus();
+  if (largeDoc && opened) {
+    const mb = Math.round(opened.content.length / (1024 * 1024));
+    setStatus(`Large file (about ${mb} MB): showing source. ⌘/Ctrl+\\ turns on live rendering, which is slower`);
+    statusEl.dataset.largeFile = "";
+  } else if (statusEl.dataset.largeFile !== undefined) {
+    // The note was about the previous document.
+    setStatus("");
+  }
 }
 
-function setMode(next: Mode) {
+function showMode(next: Mode) {
   mode = next;
   workspaceEl.dataset.mode = next;
   modeButton.textContent = next === "live" ? "Live" : "Source";
   editor.setMode(next);
+}
+
+/** Switch modes. A switch on a large document applies to it only and is not remembered. */
+function setMode(next: Mode) {
+  showMode(next);
+  if (largeDoc) return;
+  preferredMode = next;
   try {
     localStorage.setItem(MODE_KEY, next);
   } catch {
@@ -244,7 +279,7 @@ void appWindow.onCloseRequested(async (e) => {
   if (!(await confirmDiscard())) e.preventDefault();
 });
 
-setMode(mode);
+showMode(mode);
 run(async () => {
   const initial = await backend.initialState();
   await sidebar.setFolder(initial.folder);

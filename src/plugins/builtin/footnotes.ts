@@ -150,13 +150,19 @@ function structural(tr: Transaction, fromA: number, toA: number, fromB: number, 
   return blank.test(old.sliceDoc(line.from, fromA)) && /[ \t]/.test(inserted + removed);
 }
 
+/** Set on activation: whether live rendering is on, the only case where footnotes are shown. */
+let isLive: (state: EditorState) => boolean = () => true;
+
 /**
- * Footnotes of the document. Collecting them walks the whole tree, so an edit that cannot change
- * them (typing words, which is most edits) only moves the positions along.
+ * Footnotes of the document, or null in source mode, where nothing shows them. Collecting them
+ * walks the whole tree, so an edit that cannot change them (typing words, which is most edits)
+ * only moves the positions along.
  */
-const footnoteField = StateField.define<Footnotes>({
-  create: collect,
+const footnoteField = StateField.define<Footnotes | null>({
+  create: (state) => (isLive(state) ? collect(state) : null),
   update(notes, tr) {
+    if (!isLive(tr.state)) return null;
+    if (!notes) return collect(tr.state);
     if (!tr.docChanged) return syntaxTree(tr.startState) === syntaxTree(tr.state) ? notes : collect(tr.state);
     let changed = false;
     tr.changes.iterChanges((fromA, toA, fromB, _toB, inserted) => {
@@ -234,6 +240,7 @@ export const footnotesPlugin: MarkdPlugin = {
   name: "Footnotes",
 
   activate(app) {
+    isLive = app.render.isLive;
     app.markdown.addSyntax(footnoteSyntax);
     app.editor.addExtension([theme, footnoteField]);
 
