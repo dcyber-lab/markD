@@ -2,10 +2,39 @@ import { EditorView, WidgetType } from "@codemirror/view";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { backend } from "../../api";
-import type { MarkdPlugin, PluginApp } from "../api";
+import { h } from "../../dom";
+import type { ExtensionPoint, MarkdPlugin, PluginApp } from "../api";
+import { frontMatterValue } from "./front-matter";
 
-// Renders images in live mode, and stores pasted or dropped images in `assets/` next to the
-// document. The backend decides where files go; this side only inserts the returned links.
+// Renders images in live mode and stores pasted or dropped images through an image store: the
+// `assets/` folder next to the document by default, or any store another plugin adds (e.g. S3).
+// Stores decide where files go; this side only inserts the links they return.
+
+/** Where pasted and dropped images are stored. Plugins add stores to `IMAGE_STORES`. */
+export interface ImageStore {
+  /** Used in settings and front matter, e.g. `image-storage: s3`. */
+  id: string;
+  /** Shown in Settings and status messages. */
+  name: string;
+  /** Whether images are stored next to the document, so an untitled one must be saved first. */
+  needsSavedDocument?: boolean;
+  /** Store pasted image bytes; returns the link to insert. */
+  savePasted(bytes: Uint8Array, name: string): Promise<string>;
+  /** Store the images from the last OS drop; returns the links to insert. */
+  importDropped(): Promise<string[]>;
+  /** A URL to load `src` from instead (e.g. a local cache), or null to load it as is. */
+  displayUrl?(src: string): string | null;
+}
+
+export const IMAGE_STORES = "markd.images.stores";
+
+const localStore: ImageStore = {
+  id: "local",
+  name: "assets/ next to the document",
+  needsSavedDocument: true,
+  savePasted: (bytes, name) => backend.saveImage(bytes, name),
+  importDropped: () => backend.importDroppedImages(),
+};
 
 const hasScheme = /^[a-z][a-z0-9+.-]*:|^\/\//i;
 const windowsAbsolute = /^[a-z]:[\\/]|^\\\\/i;
@@ -21,9 +50,13 @@ const MIME_EXTENSIONS: Record<string, string> = {
 };
 
 /** Turn an image address from markdown into a URL the WebView can load; null if it cannot be resolved (a relative path in an unsaved document). */
-function resolveImageSrc(src: string, baseDir: string | null): string | null {
+function resolveImageSrc(src: string, baseDir: string | null, stores: readonly ImageStore[]): string | null {
   // CommonMark allows wrapping a destination containing spaces in <...>
   if (src.startsWith("<") && src.endsWith(">")) src = src.slice(1, -1);
+  for (const store of stores) {
+    const url = store.displayUrl?.(src);
+    if (url) return url;
+  }
   let path = src;
   try {
     path = decodeURI(src);
@@ -38,9 +71,14 @@ function resolveImageSrc(src: string, baseDir: string | null): string | null {
 }
 
 class ImageWidget extends WidgetType {
+  /**
+   * @param src what the WebView loads (possibly a cache or asset URL); null if unresolvable
+   * @param source the address as written in the document, shown when the image cannot load
+   */
   constructor(
     readonly src: string | null,
     readonly alt: string,
+    readonly source: string,
   ) {
     super();
   }
@@ -54,7 +92,8 @@ class ImageWidget extends WidgetType {
     wrap.className = "cm-lp-image";
     const showBroken = () => {
       wrap.className = "cm-lp-image cm-lp-image-broken";
-      wrap.textContent = `Image unavailable: ${this.alt || this.src || "relative path in an unsaved document"}`;
+      const where = this.src ? this.source : `${this.source} (relative path in an unsaved document)`;
+      wrap.textContent = `Image unavailable: ${this.alt || where}`;
     };
     if (!this.src) {
       showBroken();
@@ -79,6 +118,17 @@ class ImageWidget extends WidgetType {
 function imageMarkdown(path: string, alt = ""): string {
   const dest = /[\s()<>]/.test(path) ? `<${path}>` : path;
   return `![${alt.replace(/[[\]\\]/g, "\\$&")}](${dest})`;
+}
+
+/** Alt text from a link's file name, without the extension or a content-hash suffix. */
+function altFromLink(link: string): string {
+  let name = link.slice(link.lastIndexOf("/") + 1);
+  try {
+    name = decodeURIComponent(name);
+  } catch {
+    // not percent-encoded
+  }
+  return name.replace(/\.[^.]+$/, "").replace(/-[0-9a-f]{10}$/, "");
 }
 
 function pastedName(ext: string): string {
@@ -107,19 +157,45 @@ function insertImages(view: EditorView, from: number, to: number, links: string[
   view.focus();
 }
 
-function pasteHandler({ workspace }: PluginApp) {
+/**
+ * The store for new images in this document: `image-storage` in its front matter, else the
+ * global setting. Saves an untitled document first when the store keeps images next to it.
+ * Returns null if the user cancelled saving.
+ */
+async function storeForDocument(app: PluginApp, stores: ExtensionPoint<ImageStore>): Promise<ImageStore | null> {
+  const override = frontMatterValue(app.editor.view.state.doc, "image-storage");
+  const id = override ?? ((await backend.getSettings()).images.storage || localStore.id);
+  const store = stores.items().find((s) => s.id === id);
+  if (!store) throw new Error(`Unknown image storage "${id}"${override ? " in front matter" : ""}`);
+  if (store.needsSavedDocument && !(await app.workspace.ensureSaved())) return null;
+  return store;
+}
+
+async function addImages(app: PluginApp, store: ImageStore, count: number, save: () => Promise<string[]>) {
+  const what = count === 1 ? "image" : count > 1 ? `${count} images` : "images";
+  app.workspace.setStatus(`Saving ${what} to ${store.name}…`);
+  const links = await save();
+  app.workspace.setStatus(`Saved ${what} to ${store.name}`);
+  return links;
+}
+
+function pasteHandler(app: PluginApp, stores: ExtensionPoint<ImageStore>) {
   return EditorView.domEventHandlers({
     paste(event, view) {
       const files = [...(event.clipboardData?.files ?? [])].filter((f) => f.type in MIME_EXTENSIONS);
       if (files.length === 0) return false;
       event.preventDefault();
-      workspace.run(async () => {
-        if (!(await workspace.ensureSaved())) return;
-        const links: string[] = [];
-        for (const file of files) {
-          const bytes = new Uint8Array(await file.arrayBuffer());
-          links.push(imageMarkdown(await backend.saveImage(bytes, pastedName(MIME_EXTENSIONS[file.type]))));
-        }
+      app.workspace.run(async () => {
+        const store = await storeForDocument(app, stores);
+        if (!store) return;
+        const links = await addImages(app, store, files.length, async () => {
+          const links: string[] = [];
+          for (const file of files) {
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            links.push(imageMarkdown(await store.savePasted(bytes, pastedName(MIME_EXTENSIONS[file.type]))));
+          }
+          return links;
+        });
         const { from, to } = view.state.selection.main;
         insertImages(view, from, to, links);
       });
@@ -133,6 +209,44 @@ function pasteHandler({ workspace }: PluginApp) {
       return true;
     },
   });
+}
+
+/** Settings: which store new images go to. */
+function settingsSection(app: PluginApp, stores: ExtensionPoint<ImageStore>) {
+  return {
+    id: "images",
+    title: "Images",
+    render(el: HTMLElement) {
+      const choices = h("div", { class: "settings-choices" });
+      el.append(
+        h("div", { class: "settings-label" }, "Store pasted and dropped images in"),
+        choices,
+        h(
+          "p",
+          { class: "settings-hint" },
+          "A document can override this in its front matter, e.g. ",
+          h("code", {}, "image-storage: local"),
+          " or ",
+          h("code", {}, "image-storage: s3"),
+          ".",
+        ),
+      );
+      app.workspace.run(async () => {
+        const current = (await backend.getSettings()).images.storage || localStore.id;
+        for (const store of stores.items()) {
+          const input = h("input", { type: "radio", name: "image-storage", value: store.id, checked: store.id === current });
+          input.addEventListener("change", () =>
+            app.workspace.run(async () => {
+              const settings = await backend.getSettings();
+              await backend.setSettings({ images: { ...settings.images, storage: store.id } });
+              app.workspace.setStatus(`New images go to ${store.name}`);
+            }),
+          );
+          choices.append(h("label", { class: "settings-choice" }, input, store.name));
+        }
+      });
+    },
+  };
 }
 
 let stopDropListener: Promise<UnlistenFn> | null = null;
@@ -158,31 +272,35 @@ export const images: MarkdPlugin = {
   name: "Images",
 
   activate(app) {
-    app.editor.addExtension([theme, pasteHandler(app)]);
+    const stores = app.extensionPoint<ImageStore>(IMAGE_STORES);
+    stores.add(localStore);
+
+    app.editor.addExtension([theme, pasteHandler(app, stores)]);
+    app.settings.addSection(settingsSection(app, stores));
 
     app.render.node("Image", (node, ctx) => {
       if (ctx.isActive(node.from, node.to)) return;
       const marks = node.node.getChildren("LinkMark");
       const url = node.node.getChild("URL");
       const alt = marks.length >= 2 ? ctx.state.sliceDoc(marks[0].to, marks[1].from) : "";
-      const src = url ? resolveImageSrc(ctx.state.sliceDoc(url.from, url.to), ctx.baseDir) : null;
-      ctx.replace(node.from, node.to, new ImageWidget(src, alt));
+      const source = url ? ctx.state.sliceDoc(url.from, url.to) : "";
+      const src = url ? resolveImageSrc(source, ctx.baseDir, stores.items()) : null;
+      ctx.replace(node.from, node.to, new ImageWidget(src, alt, source));
       return false;
     });
 
     // Import images dropped onto the window and link them where they were dropped.
-    const { workspace } = app;
     stopDropListener = listen<{ x: number; y: number }>("images-dropped", ({ payload }) =>
-      workspace.run(async () => {
+      app.workspace.run(async () => {
         const view = app.editor.view;
         // Tauri reports the drop in physical pixels relative to the webview.
         const scale = window.devicePixelRatio || 1;
         const at = view.posAtCoords({ x: payload.x / scale, y: payload.y / scale }) ?? view.state.selection.main.head;
-        if (!(await workspace.ensureSaved())) return;
-        const links = await backend.importDroppedImages();
-        const alt = (link: string) => link.slice(link.lastIndexOf("/") + 1).replace(/\.[^.]+$/, "");
+        const store = await storeForDocument(app, stores);
+        if (!store) return;
+        const links = await addImages(app, store, 0, () => store.importDropped());
         const pos = Math.min(at, view.state.doc.length);
-        insertImages(view, pos, pos, links.map((link) => imageMarkdown(link, alt(link))));
+        insertImages(view, pos, pos, links.map((link) => imageMarkdown(link, altFromLink(link))));
       }),
     );
   },

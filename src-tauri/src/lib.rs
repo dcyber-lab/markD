@@ -16,6 +16,8 @@ use tauri_plugin_dialog::DialogExt;
 
 mod folder;
 mod images;
+mod s3;
+mod settings;
 
 const MD_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "txt"];
 
@@ -44,6 +46,7 @@ struct AppState {
     folder: Mutex<Option<folder::OpenFolder>>,
     /// Image files from the last OS drop, waiting for the frontend to import them.
     dropped_images: Mutex<Vec<PathBuf>>,
+    http: reqwest::Client,
 }
 
 fn io_err(path: &Path, e: impl std::fmt::Display) -> String {
@@ -224,6 +227,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .register_asynchronous_uri_scheme_protocol(s3::CACHE_SCHEME, s3::cache_protocol)
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) = event {
                 images::on_drop(window.app_handle(), paths, *position);
@@ -242,7 +246,12 @@ pub fn run() {
             folder::rename_entry,
             folder::delete_entry,
             images::save_image,
-            images::import_dropped_images
+            images::import_dropped_images,
+            settings::get_settings,
+            settings::set_settings,
+            s3::s3_upload_image,
+            s3::s3_upload_dropped,
+            s3::s3_test
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

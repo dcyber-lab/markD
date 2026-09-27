@@ -60,11 +60,34 @@ export interface EventMap {
   "folder-opened": FolderInfo | null;
 }
 
+/**
+ * A named list plugins contribute to, letting one plugin extend another. The images plugin, for
+ * example, reads image stores from `markd.images.stores`, and the S3 plugin adds one.
+ */
+export interface ExtensionPoint<T> {
+  add(item: T): Disposable;
+  items(): readonly T[];
+}
+
+/** A section in the Settings dialog. */
+export interface SettingsSection {
+  id: string;
+  title: string;
+  /** Fill `el` with the section's controls. Called each time the dialog opens. */
+  render(el: HTMLElement): void;
+}
+
 export interface PluginApp {
   readonly apiVersion: number;
 
   commands: {
     add(command: Command): Disposable;
+  };
+
+  extensionPoint<T>(id: string): ExtensionPoint<T>;
+
+  settings: {
+    addSection(section: SettingsSection): Disposable;
   };
 
   markdown: {
@@ -75,6 +98,8 @@ export interface PluginApp {
   render: {
     /** Render syntax nodes with these names (e.g. `"Image"`) in live mode. */
     node(names: string | string[], renderer: NodeRenderer): Disposable;
+    /** Re-render live mode, e.g. after a setting that renderers depend on changed. */
+    refresh(): void;
   };
 
   editor: {

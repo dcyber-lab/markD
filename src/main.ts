@@ -7,6 +7,7 @@ import { createEditor, type Mode } from "./editor";
 import type { Command } from "./plugins/api";
 import { builtinPlugins } from "./plugins/builtin";
 import { PluginHost } from "./plugins/host";
+import { openSettings } from "./settings-dialog";
 import { Sidebar } from "./sidebar";
 
 const appWindow = getCurrentWindow();
@@ -14,6 +15,7 @@ const workspaceEl = document.querySelector<HTMLElement>("#workspace")!;
 const statusEl = document.querySelector<HTMLElement>("#status")!;
 const modeButton = document.querySelector<HTMLButtonElement>("#mode-toggle")!;
 const sidebarButton = document.querySelector<HTMLButtonElement>("#sidebar-toggle")!;
+const settingsButton = document.querySelector<HTMLButtonElement>("#settings-toggle")!;
 
 const MODE_KEY = "markd.mode";
 
@@ -188,6 +190,10 @@ const commands = {
   async toggleSidebar() {
     sidebar.toggleVisible();
   },
+
+  async openSettings() {
+    openSettings(host);
+  },
 };
 
 const coreCommands: Command[] = [
@@ -198,6 +204,7 @@ const coreCommands: Command[] = [
   { id: "file.save-as", title: "Save As…", key: "Mod-Shift-s", run: commands.saveAs },
   { id: "view.toggle-source", title: "Toggle Source Mode", key: "Mod-\\", run: commands.toggleMode },
   { id: "view.toggle-sidebar", title: "Toggle Sidebar", key: "Mod-Shift-e", run: commands.toggleSidebar },
+  { id: "app.settings", title: "Settings…", key: "Mod-,", run: commands.openSettings },
 ];
 for (const command of coreCommands) host.addCommand(command);
 
@@ -211,6 +218,7 @@ window.addEventListener("keydown", (e) => {
 
 modeButton.addEventListener("click", () => run(commands.toggleMode));
 sidebarButton.addEventListener("click", () => run(commands.toggleSidebar));
+settingsButton.addEventListener("click", () => run(commands.openSettings));
 
 void listen<string>("file-changed", ({ payload }) => {
   if (isDirty()) {
