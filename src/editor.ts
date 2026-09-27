@@ -53,6 +53,8 @@ const theme = EditorView.theme({
 export interface EditorOptions {
   mode: Mode;
   onChange: () => void;
+  /** Extra extensions, kept across document loads. */
+  extensions?: Extension[];
 }
 
 export function createEditor(parent: HTMLElement, opts: EditorOptions) {
@@ -81,6 +83,7 @@ export function createEditor(parent: HTMLElement, opts: EditorOptions) {
     EditorView.updateListener.of((u) => {
       if (u.docChanged) opts.onChange();
     }),
+    opts.extensions ?? [],
   ];
 
   const view = new EditorView({

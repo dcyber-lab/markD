@@ -36,6 +36,8 @@ Requires Rust, Node 22+, pnpm, and the [Tauri prerequisites](https://tauri.app/s
 
 **Folder sidebar:** open a folder to browse its subfolders and Markdown files (hidden entries are skipped; folders load lazily as you expand them). Right-click for New File, New Folder, Rename (inline), Move to Trash, and Reveal in Finder / Explorer. The tree follows changes made on disk, and the last folder, expanded folders, and sidebar width are restored on the next launch. Switching files from the sidebar saves unsaved changes first; an untitled document asks before discarding.
 
+**Images:** paste an image (e.g. a screenshot) or drop image files onto the window, and markd stores them in an `assets/` folder next to the document and inserts a relative link such as `![](assets/image-20260927-161305.png)`. Existing names are never overwritten (`-1`, `-2`, ... are appended), and images already in `assets/` are linked rather than copied. An untitled document is saved first so the images have somewhere to go.
+
 ## Layout
 
 ```
@@ -44,12 +46,14 @@ src/
   editor.ts         CodeMirror 6 setup, theme, highlighting, mode switching
   live-preview.ts   live rendering: hide markup, style content, swap in widgets from the syntax tree
   widgets.ts        image / bullet / checkbox widgets and image path resolution
+  images.ts         paste / drop images and insert links
   sidebar.ts        folder tree, context menu, inline rename, resizing
   platform.ts       platform helpers (⌘ vs Ctrl, "Reveal in Finder" label)
   api.ts            typed wrappers for backend commands
 src-tauri/src/
   lib.rs            open / atomic save / watch the open file / startup state
   folder.rs         open folder, listing, create / rename / trash, path checks
+  images.rs         store pasted and dropped images in assets/
 ```
 
 ## Security
@@ -57,6 +61,7 @@ src-tauri/src/
 - **The backend decides which paths are reachable.** Single files come from the command line or a system dialog, and the frontend only submits their content. Sidebar operations take paths from the frontend, but only inside the folder the user opened: every command resolves symlinks and `..` first and rejects anything outside that folder, and new names may not contain path separators.
 - Raw HTML in Markdown is not rendered (it stays visible as source), and image widgets only set `src`, so there is no HTML injection surface. The production build also enforces a CSP that blocks inline scripts and `eval`.
 - Local images are served through Tauri's asset protocol with an empty default scope; only the open folder and the open file's directory are allowed.
+- Pasted images reach the backend as bytes only, and dropped files are read from the OS drop event in Rust, so the frontend never names a source or destination path. Images always land in the open document's `assets/` folder, with the suggested name reduced to a plain file name with an image extension.
 - Deleting moves items to the system trash rather than removing them permanently.
 
 ## Known limitations
@@ -67,7 +72,6 @@ src-tauri/src/
 
 - [ ] Render tables as real table widgets (needs block decorations from a StateField)
 - [ ] Math (KaTeX) and Mermaid diagrams, loaded on demand
-- [ ] Paste / drop images into `./assets/` automatically
 - [ ] Drag and drop to move files in the sidebar; search across the folder
 - [ ] File associations and macOS "Open With" (`RunEvent::Opened`)
 - [ ] Export to HTML / PDF

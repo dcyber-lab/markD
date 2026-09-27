@@ -44,4 +44,10 @@ export const backend = {
   createDir: (dir: string, name: string) => invoke<string>("create_dir", { dir, name }),
   renameEntry: (path: string, name: string) => invoke<Renamed>("rename_entry", { path, name }),
   deleteEntry: (path: string) => invoke<boolean>("delete_entry", { path }),
+
+  /** Store pasted image bytes in the document's `assets` folder; returns the relative link. */
+  saveImage: (bytes: Uint8Array, name: string) =>
+    invoke<string>("save_image", bytes, { headers: { "x-file-name": name } }),
+  /** Copy the images from the last OS drop into `assets`; returns their relative links. */
+  importDroppedImages: () => invoke<string[]>("import_dropped_images"),
 };

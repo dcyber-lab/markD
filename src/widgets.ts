@@ -45,6 +45,7 @@ export class ImageWidget extends WidgetType {
       return wrap;
     }
     const img = document.createElement("img");
+    img.decoding = "async"; // keep large images from blocking typing while they decode
     img.src = this.src;
     img.alt = this.alt;
     img.addEventListener("error", showBroken);

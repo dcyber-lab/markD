@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { backend, type DocInfo } from "./api";
 import { createEditor, type Mode } from "./editor";
+import { imagePaste, listenForDroppedImages, type ImageOptions } from "./images";
 import { hasModKey } from "./platform";
 import { Sidebar } from "./sidebar";
 
@@ -22,6 +23,7 @@ let mode: Mode = readMode();
 let countTimer: number | undefined;
 let windowTitle = "";
 
+const imageOptions: ImageOptions = { ensureSaved, run };
 const editor = createEditor(document.querySelector<HTMLElement>("#editor")!, {
   mode,
   onChange() {
@@ -29,6 +31,7 @@ const editor = createEditor(document.querySelector<HTMLElement>("#editor")!, {
     clearTimeout(countTimer);
     countTimer = window.setTimeout(refreshCount, COUNT_DELAY_MS);
   },
+  extensions: [imagePaste(imageOptions)],
 });
 /** Content matching what is on disk, used to detect unsaved changes. */
 let savedDoc: Text = editor.view.state.doc;
@@ -120,6 +123,13 @@ async function leaveCurrent(): Promise<boolean> {
   return true;
 }
 
+/** Images are stored next to the document, so an untitled one has to be saved first. */
+async function ensureSaved(): Promise<boolean> {
+  if (doc) return true;
+  setStatus("Save the document first; images are stored next to it in ./assets");
+  return commands.saveAs();
+}
+
 async function openFromTree(path: string) {
   if (path === doc?.path) return;
   if (!(await leaveCurrent())) return;
@@ -158,16 +168,18 @@ const commands = {
     setStatus(`Saved ${doc.path}`);
   },
 
-  async saveAs() {
+  /** Returns false if the user cancelled the dialog. */
+  async saveAs(): Promise<boolean> {
     const snapshot = editor.view.state.doc;
     const info = await backend.saveFileAs(snapshot.toString());
-    if (!info) return;
+    if (!info) return false;
     doc = info;
     editor.setBaseDir(info.dir);
     savedDoc = snapshot;
     sidebar.setActive(info.path);
     refreshTitle();
     setStatus(`Saved ${info.path}`);
+    return true;
   },
 
   async toggleMode() {
@@ -214,6 +226,7 @@ void listen<string>("file-changed", ({ payload }) => {
 });
 
 void listen("tree-changed", () => run(() => sidebar.refresh()));
+void listenForDroppedImages(editor.view, imageOptions);
 
 void appWindow.onCloseRequested(async (e) => {
   if (!(await confirmDiscard())) e.preventDefault();

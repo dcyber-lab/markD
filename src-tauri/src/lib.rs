@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 mod folder;
+mod images;
 
 const MD_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "txt"];
 
@@ -41,6 +42,8 @@ struct OpenDoc {
 struct AppState {
     doc: Mutex<Option<OpenDoc>>,
     folder: Mutex<Option<folder::OpenFolder>>,
+    /// Image files from the last OS drop, waiting for the frontend to import them.
+    dropped_images: Mutex<Vec<PathBuf>>,
 }
 
 fn io_err(path: &Path, e: impl std::fmt::Display) -> String {
@@ -221,6 +224,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) = event {
+                images::on_drop(window.app_handle(), paths, *position);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             initial_state,
             open_file,
@@ -232,7 +240,9 @@ pub fn run() {
             folder::create_file,
             folder::create_dir,
             folder::rename_entry,
-            folder::delete_entry
+            folder::delete_entry,
+            images::save_image,
+            images::import_dropped_images
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
