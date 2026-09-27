@@ -3,10 +3,11 @@ import { languages } from "@codemirror/language-data";
 import { Compartment, type Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { MarkdownConfig } from "@lezer/markdown";
-import { nodeRenderers } from "../live-preview";
+import { blockRenderers, nodeRenderers } from "../live-preview";
 import { isMac } from "../platform";
 import {
   API_VERSION,
+  type BlockRenderer,
   type Command,
   type Disposable,
   type EventMap,
@@ -46,6 +47,7 @@ export class PluginHost {
   private readonly commands: Command[] = [];
   private readonly syntax: MarkdownConfig[] = [];
   private readonly renderers = new Map<string, NodeRenderer[]>();
+  private readonly blockRenderers = new Map<string, BlockRenderer[]>();
   private readonly extensions: Extension[] = [];
   private readonly listeners = new Map<string, Set<Listener>>();
   private readonly points = new Map<string, unknown[]>();
@@ -77,6 +79,7 @@ export class PluginHost {
     return [
       markdown({ base: markdownLanguage, codeLanguages: languages, extensions: [...this.syntax] }),
       nodeRenderers.of(new Map(this.renderers)),
+      blockRenderers.of(new Map(this.blockRenderers)),
       [...this.extensions],
     ];
   }
@@ -92,6 +95,21 @@ export class PluginHost {
     return () => {
       remove(list, item);
       if (reconfigure) this.changed();
+    };
+  }
+
+  /** Register `renderer` under each name in `names`; returns how to take it out again. */
+  private addRenderer<R>(map: Map<string, R[]>, names: string | string[], renderer: R): Disposable {
+    const lists = (typeof names === "string" ? [names] : names).map((name) => {
+      let list = map.get(name);
+      if (!list) map.set(name, (list = []));
+      return list;
+    });
+    for (const list of lists) list.push(renderer);
+    this.changed();
+    return () => {
+      for (const list of lists) remove(list, renderer);
+      this.changed();
     };
   }
 
@@ -163,20 +181,9 @@ export class PluginHost {
         addSyntax: (extension) => track(this.add(this.syntax, extension)),
       },
       render: {
-        node: (names, renderer) => {
-          const wrapped = guard(renderer, undefined);
-          const lists = (typeof names === "string" ? [names] : names).map((name) => {
-            let list = this.renderers.get(name);
-            if (!list) this.renderers.set(name, (list = []));
-            return list;
-          });
-          for (const list of lists) list.push(wrapped);
-          this.changed();
-          return track(() => {
-            for (const list of lists) remove(list, wrapped);
-            this.changed();
-          });
-        },
+        node: (names, renderer) => track(this.addRenderer(this.renderers, names, guard(renderer, undefined))),
+        // A block renderer that throws leaves that block as source.
+        block: (names, renderer) => track(this.addRenderer(this.blockRenderers, names, guard(renderer, null))),
         refresh: () => this.changed(),
       },
       editor: {
