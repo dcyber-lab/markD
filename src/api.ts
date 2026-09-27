@@ -4,6 +4,10 @@ export interface DocInfo {
   path: string;
   dir: string;
   name: string;
+}
+
+/** A document just opened, with its text as it is on disk. */
+export interface OpenedDoc extends DocInfo {
   content: string;
 }
 
@@ -26,7 +30,7 @@ export interface Renamed {
 
 export interface InitialState {
   folder: FolderInfo | null;
-  doc: DocInfo | null;
+  doc: OpenedDoc | null;
 }
 
 export interface S3Settings {
@@ -55,17 +59,40 @@ export interface SettingsView extends Settings {
   s3PublicBase: string | null;
 }
 
+const encoder = new TextEncoder();
+// Keep a byte order mark: by default TextDecoder drops it, and saving would then change the file.
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+
+/** The open document's text, sent by the backend as raw UTF-8 rather than a JSON string. */
+async function documentContent(): Promise<string> {
+  return decoder.decode(await invoke<ArrayBuffer>("document_content"));
+}
+
+async function withContent(doc: DocInfo): Promise<OpenedDoc> {
+  return { ...doc, content: await documentContent() };
+}
+
 // Commands defined in src-tauri/src. The backend decides every path: files come from system
 // dialogs or the command line, and folder operations are limited to the folder the user opened.
+// Document text goes both ways as raw UTF-8: as a JSON string, a large file took seconds to open
+// or save.
 export const backend = {
-  initialState: () => invoke<InitialState>("initial_state"),
-  openFile: () => invoke<DocInfo | null>("open_file"),
-  saveFile: (content: string) => invoke<void>("save_file", { content }),
-  saveFileAs: (content: string) => invoke<DocInfo | null>("save_file_as", { content }),
+  async initialState(): Promise<InitialState> {
+    const state = await invoke<{ folder: FolderInfo | null; doc: DocInfo | null }>("initial_state");
+    return { folder: state.folder, doc: state.doc && (await withContent(state.doc)) };
+  },
+  async openFile(): Promise<OpenedDoc | null> {
+    const doc = await invoke<DocInfo | null>("open_file");
+    return doc && withContent(doc);
+  },
+  /** The text on disk, after the backend reported that the file changed. */
+  documentContent,
+  saveFile: (content: string) => invoke<void>("save_file", encoder.encode(content)),
+  saveFileAs: (content: string) => invoke<DocInfo | null>("save_file_as", encoder.encode(content)),
 
   openFolder: () => invoke<FolderInfo | null>("open_folder"),
   listDir: (path: string) => invoke<Entry[]>("list_dir", { path }),
-  openEntry: (path: string) => invoke<DocInfo>("open_entry", { path }),
+  openEntry: async (path: string) => withContent(await invoke<DocInfo>("open_entry", { path })),
   createFile: (dir: string, name: string) => invoke<string>("create_file", { dir, name }),
   createDir: (dir: string, name: string) => invoke<string>("create_dir", { dir, name }),
   renameEntry: (path: string, name: string) => invoke<Renamed>("rename_entry", { path, name }),

@@ -2,7 +2,7 @@ import type { Text } from "@codemirror/state";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { backend, type DocInfo } from "./api";
+import { backend, type DocInfo, type OpenedDoc } from "./api";
 import { createEditor, type Mode } from "./editor";
 import type { Command } from "./plugins/api";
 import { builtinPlugins } from "./plugins/builtin";
@@ -87,9 +87,11 @@ function refreshTitle() {
   void appWindow.setTitle(title);
 }
 
-function load(info: DocInfo | null) {
+function load(opened: OpenedDoc | null) {
+  // Only the path and name are kept; the text lives in the editor.
+  const info = opened && { path: opened.path, dir: opened.dir, name: opened.name };
   doc = info;
-  editor.load(info?.content ?? "", info?.dir ?? null);
+  editor.load(opened?.content ?? "", info?.dir ?? null);
   savedDoc = editor.view.state.doc;
   sidebar.setActive(info?.path ?? null);
   refreshTitle();
@@ -221,16 +223,20 @@ modeButton.addEventListener("click", () => run(commands.toggleMode));
 sidebarButton.addEventListener("click", () => run(commands.toggleSidebar));
 settingsButton.addEventListener("click", () => run(commands.openSettings));
 
-void listen<string>("file-changed", ({ payload }) => {
-  if (isDirty()) {
-    setStatus("File changed on disk, but you have unsaved changes here, so it was not reloaded", "error");
-    return;
-  }
-  editor.replace(payload);
-  savedDoc = editor.view.state.doc;
-  refreshTitle();
-  setStatus("File changed on disk and was reloaded");
-});
+void listen("file-changed", () =>
+  run(async () => {
+    if (isDirty()) {
+      setStatus("File changed on disk, but you have unsaved changes here, so it was not reloaded", "error");
+      return;
+    }
+    const text = await backend.documentContent();
+    if (isDirty()) return; // edited while the new text was on its way
+    editor.replace(text);
+    savedDoc = editor.view.state.doc;
+    refreshTitle();
+    setStatus("File changed on disk and was reloaded");
+  }),
+);
 
 void listen("tree-changed", () => run(() => sidebar.refresh()));
 

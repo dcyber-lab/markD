@@ -155,6 +155,7 @@ src-tauri/src/
 ## Known limitations
 
 - The open folder is watched recursively. That is cheap on macOS and Windows, but on Linux (inotify) a very large folder can hit the system's watch limit.
+- In very large files (tens of MB) the Markdown parser only runs a limited distance ahead of the visible text. After jumping far into such a file, live rendering appears once parsing catches up (for files of about 50 MB and more, it may not), and the text shows as source until then; editing is unaffected.
 
 ## Roadmap
 
