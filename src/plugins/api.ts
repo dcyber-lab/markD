@@ -133,6 +133,11 @@ export interface PluginApp {
     readonly doc: DocInfo | null;
     /** Make sure the document has a file on disk; false if the user cancelled Save As. */
     ensureSaved(): Promise<boolean>;
+    /**
+     * Open a file, saving changes to the current document first. Only files inside the open folder
+     * can be opened this way; anything else is rejected by the backend.
+     */
+    open(path: string): Promise<void>;
     setStatus(message: string, kind?: "info" | "error"): void;
     /** Run a task, reporting a failure in the status bar. */
     run(task: () => Promise<unknown>): void;

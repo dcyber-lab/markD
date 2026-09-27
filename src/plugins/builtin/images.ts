@@ -5,6 +5,7 @@ import { backend } from "../../api";
 import { h } from "../../dom";
 import type { ExtensionPoint, MarkdPlugin, PluginApp } from "../api";
 import { frontMatterValue } from "./front-matter";
+import { linkDestination } from "./references";
 
 // Renders images in live mode and stores pasted or dropped images through an image store: the
 // `assets/` folder next to the document by default, or any store another plugin adds (e.g. S3).
@@ -281,10 +282,11 @@ export const images: MarkdPlugin = {
     app.render.node("Image", (node, ctx) => {
       if (ctx.isActive(node.from, node.to)) return;
       const marks = node.node.getChildren("LinkMark");
-      const url = node.node.getChild("URL");
+      // `![alt][label]` with an undefined label is plain text in CommonMark, so it stays as written.
+      const source = linkDestination(ctx.state, node.node);
+      if (source === null) return false;
       const alt = marks.length >= 2 ? ctx.state.sliceDoc(marks[0].to, marks[1].from) : "";
-      const source = url ? ctx.state.sliceDoc(url.from, url.to) : "";
-      const src = url ? resolveImageSrc(source, ctx.baseDir, stores.items()) : null;
+      const src = source ? resolveImageSrc(source, ctx.baseDir, stores.items()) : null;
       ctx.replace(node.from, node.to, new ImageWidget(src, alt, source));
       return false;
     });
