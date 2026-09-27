@@ -5,12 +5,14 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { backend, type DocInfo } from "./api";
 import { createEditor, type Mode } from "./editor";
 import { hasModKey } from "./platform";
+import { Sidebar } from "./sidebar";
 
 const appWindow = getCurrentWindow();
 const workspace = document.querySelector<HTMLElement>("#workspace")!;
 const statusEl = document.querySelector<HTMLElement>("#status")!;
 const countEl = document.querySelector<HTMLElement>("#word-count")!;
 const modeButton = document.querySelector<HTMLButtonElement>("#mode-toggle")!;
+const sidebarButton = document.querySelector<HTMLButtonElement>("#sidebar-toggle")!;
 
 const MODE_KEY = "markd.mode";
 const COUNT_DELAY_MS = 300;
@@ -30,6 +32,23 @@ const editor = createEditor(document.querySelector<HTMLElement>("#editor")!, {
 });
 /** Content matching what is on disk, used to detect unsaved changes. */
 let savedDoc: Text = editor.view.state.doc;
+
+const sidebar = new Sidebar(document.querySelector<HTMLElement>("#sidebar")!, {
+  openFile: openFromTree,
+  openFolder: () => commands.openFolder(),
+  docMoved(moved) {
+    doc = moved;
+    editor.setBaseDir(moved.dir);
+    sidebar.setActive(moved.path);
+    refreshTitle();
+    setStatus(`Renamed to ${moved.path}`);
+  },
+  docRemoved() {
+    load(null);
+    setStatus("Moved the open document to the Trash");
+  },
+  run,
+});
 
 function readMode(): Mode {
   try {
@@ -70,6 +89,7 @@ function load(info: DocInfo | null) {
   doc = info;
   editor.load(info?.content ?? "", info?.dir ?? null);
   savedDoc = editor.view.state.doc;
+  sidebar.setActive(info?.path ?? null);
   refreshTitle();
   refreshCount();
   editor.focus();
@@ -92,18 +112,40 @@ async function confirmDiscard(): Promise<boolean> {
   return ask("You have unsaved changes. Discard them?", { title: "markd", kind: "warning" });
 }
 
+/** Before switching documents: save changes to a file on disk, or confirm discarding an untitled one. */
+async function leaveCurrent(): Promise<boolean> {
+  if (!isDirty()) return true;
+  if (!doc) return confirmDiscard();
+  await commands.save();
+  return true;
+}
+
+async function openFromTree(path: string) {
+  if (path === doc?.path) return;
+  if (!(await leaveCurrent())) return;
+  load(await backend.openEntry(path));
+}
+
 const commands = {
   async newFile() {
-    if (await confirmDiscard()) load(null);
+    if (await leaveCurrent()) load(null);
   },
 
   async open() {
-    if (!(await confirmDiscard())) return;
+    if (!(await leaveCurrent())) return;
     const info = await backend.openFile();
     if (info) {
       load(info);
       setStatus(`Opened ${info.path}`);
     }
+  },
+
+  async openFolder() {
+    const folder = await backend.openFolder();
+    if (!folder) return;
+    sidebar.show();
+    await sidebar.setFolder(folder);
+    setStatus(`Opened folder ${folder.root}`);
   },
 
   async save() {
@@ -123,12 +165,17 @@ const commands = {
     doc = info;
     editor.setBaseDir(info.dir);
     savedDoc = snapshot;
+    sidebar.setActive(info.path);
     refreshTitle();
     setStatus(`Saved ${info.path}`);
   },
 
   async toggleMode() {
     setMode(mode === "live" ? "source" : "live");
+  },
+
+  async toggleSidebar() {
+    sidebar.toggleVisible();
   },
 };
 
@@ -141,8 +188,9 @@ window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
   const command =
     key === "n" ? commands.newFile
-    : key === "o" ? commands.open
+    : key === "o" ? (e.shiftKey ? commands.openFolder : commands.open)
     : key === "s" ? (e.shiftKey ? commands.saveAs : commands.save)
+    : key === "e" && e.shiftKey ? commands.toggleSidebar
     : key === "\\" ? commands.toggleMode
     : null;
   if (!command) return;
@@ -151,6 +199,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 modeButton.addEventListener("click", () => run(commands.toggleMode));
+sidebarButton.addEventListener("click", () => run(commands.toggleSidebar));
 
 void listen<string>("file-changed", ({ payload }) => {
   if (isDirty()) {
@@ -164,9 +213,15 @@ void listen<string>("file-changed", ({ payload }) => {
   setStatus("File changed on disk and was reloaded");
 });
 
+void listen("tree-changed", () => run(() => sidebar.refresh()));
+
 void appWindow.onCloseRequested(async (e) => {
   if (!(await confirmDiscard())) e.preventDefault();
 });
 
 setMode(mode);
-run(async () => load(await backend.initialFile()));
+run(async () => {
+  const initial = await backend.initialState();
+  await sidebar.setFolder(initial.folder);
+  load(initial.doc);
+});

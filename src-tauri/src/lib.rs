@@ -14,6 +14,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+mod folder;
+
 const MD_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "txt"];
 
 /// A document sent to the frontend. Paths are decided only by the backend (a CLI argument or
@@ -38,6 +40,7 @@ struct OpenDoc {
 #[derive(Default)]
 struct AppState {
     doc: Mutex<Option<OpenDoc>>,
+    folder: Mutex<Option<folder::OpenFolder>>,
 }
 
 fn io_err(path: &Path, e: impl std::fmt::Display) -> String {
@@ -92,7 +95,7 @@ fn track(app: &AppHandle, path: PathBuf, content: String) -> Result<DocInfo, Str
 }
 
 fn open_path(app: &AppHandle, path: &Path) -> Result<DocInfo, String> {
-    let path = fs::canonicalize(path).map_err(|e| io_err(path, e))?;
+    let path = dunce::canonicalize(path).map_err(|e| io_err(path, e))?;
     let content = fs::read_to_string(&path).map_err(|e| io_err(&path, e))?;
     track(app, path, content)
 }
@@ -134,22 +137,42 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     result.map_err(|e| io_err(path, e))
 }
 
-/// The document to show when the window loads: the one already open (after a frontend reload) or
-/// the file given on the command line.
+#[derive(Serialize)]
+struct InitialState {
+    folder: Option<folder::FolderInfo>,
+    doc: Option<DocInfo>,
+}
+
+/// What to show when the window loads. The command-line argument may be a folder or a file.
 #[tauri::command]
-async fn initial_file(app: AppHandle, state: State<'_, AppState>) -> Result<Option<DocInfo>, String> {
-    let current = state.doc.lock().unwrap().as_ref().map(|d| d.path.clone());
-    let path = match current {
-        Some(p) => p,
-        None => match std::env::args_os()
-            .skip(1)
-            .find(|a| !a.to_string_lossy().starts_with('-'))
-        {
-            Some(arg) => PathBuf::from(arg),
-            None => return Ok(None),
-        },
+async fn initial_state(app: AppHandle, state: State<'_, AppState>) -> Result<InitialState, String> {
+    let arg = std::env::args_os()
+        .skip(1)
+        .find(|a| !a.to_string_lossy().starts_with('-'))
+        .map(PathBuf::from);
+    let (arg_dir, arg_file) = match arg {
+        Some(p) if p.is_dir() => (Some(p), None),
+        other => (None, other),
     };
-    open_path(&app, &path).map(Some)
+
+    // Folder: the one already open (after a frontend reload), the argument, or the last one used.
+    let current_folder = state.folder.lock().unwrap().as_ref().map(|f| f.root.clone());
+    let folder = match current_folder
+        .or(arg_dir)
+        .or_else(|| folder::remembered_folder(&app))
+    {
+        Some(root) => Some(folder::open_folder_at(&app, &root)?),
+        None => None,
+    };
+
+    // Document: the one already open, or the file given as the argument.
+    let current_doc = state.doc.lock().unwrap().as_ref().map(|d| d.path.clone());
+    let doc = match current_doc.or(arg_file) {
+        Some(path) => Some(open_path(&app, &path)?),
+        None => None,
+    };
+
+    Ok(InitialState { folder, doc })
 }
 
 #[tauri::command]
@@ -188,7 +211,7 @@ async fn save_file_as(app: AppHandle, content: String) -> Result<Option<DocInfo>
     };
     let path = picked.into_path().map_err(|e| e.to_string())?;
     write_atomic(&path, &content)?;
-    let path = fs::canonicalize(&path).map_err(|e| io_err(&path, e))?;
+    let path = dunce::canonicalize(&path).map_err(|e| io_err(&path, e))?;
     track(&app, path, content).map(Some)
 }
 
@@ -199,10 +222,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
-            initial_file,
+            initial_state,
             open_file,
             save_file,
-            save_file_as
+            save_file_as,
+            folder::open_folder,
+            folder::list_dir,
+            folder::open_entry,
+            folder::create_file,
+            folder::create_dir,
+            folder::rename_entry,
+            folder::delete_entry
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

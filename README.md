@@ -8,9 +8,10 @@ Files stay plain Markdown on disk. Rendering is only a view layer on top of the 
 
 ```bash
 pnpm install
-pnpm tauri dev                 # run in development mode
-pnpm tauri dev -- -- note.md   # open a file on startup
-pnpm tauri build               # build an installer for the current platform
+pnpm tauri dev                   # run in development mode
+pnpm tauri dev -- -- note.md     # open a file on startup
+pnpm tauri dev -- -- ~/notes     # open a folder on startup
+pnpm tauri build                 # build an installer for the current platform
 ```
 
 Requires Rust, Node 22+, pnpm, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your platform.
@@ -20,16 +21,20 @@ Requires Rust, Node 22+, pnpm, and the [Tauri prerequisites](https://tauri.app/s
 | Shortcut | Action |
 |---|---|
 | ⌘/Ctrl + N | New |
-| ⌘/Ctrl + O | Open |
+| ⌘/Ctrl + O | Open file |
+| ⌘/Ctrl + Shift + O | Open folder |
 | ⌘/Ctrl + S | Save (Save As for untitled documents) |
 | ⌘/Ctrl + Shift + S | Save As |
+| ⌘/Ctrl + Shift + E | Show / hide the sidebar |
 | ⌘/Ctrl + \ | Toggle live rendering / source mode |
 | ⌘/Ctrl + F | Find and replace |
 | ⌘/Ctrl + click a link | Open it in the system browser |
 
-## What renders live
+## Features
 
-Headings, bold / italic / strikethrough, inline code, links, bullet lists, task lists (click to toggle), blockquotes, horizontal rules, fenced code blocks (with syntax highlighting), and images (relative local paths or remote URLs). Tables are currently only aligned with a monospace font.
+**Live rendering:** headings, bold / italic / strikethrough, inline code, links, bullet lists, task lists (click to toggle), blockquotes, horizontal rules, fenced code blocks (with syntax highlighting), and images (relative local paths or remote URLs). Tables are currently only aligned with a monospace font.
+
+**Folder sidebar:** open a folder to browse its subfolders and Markdown files (hidden entries are skipped; folders load lazily as you expand them). Right-click for New File, New Folder, Rename (inline), Move to Trash, and Reveal in Finder / Explorer. The tree follows changes made on disk, and the last folder, expanded folders, and sidebar width are restored on the next launch. Switching files from the sidebar saves unsaved changes first; an untitled document asks before discarding.
 
 ## Layout
 
@@ -39,21 +44,30 @@ src/
   editor.ts         CodeMirror 6 setup, theme, highlighting, mode switching
   live-preview.ts   live rendering: hide markup, style content, swap in widgets from the syntax tree
   widgets.ts        image / bullet / checkbox widgets and image path resolution
-  platform.ts       platform helpers (⌘ vs Ctrl)
+  sidebar.ts        folder tree, context menu, inline rename, resizing
+  platform.ts       platform helpers (⌘ vs Ctrl, "Reveal in Finder" label)
   api.ts            typed wrappers for backend commands
-src-tauri/src/lib.rs  open / atomic save / watch for external changes / CLI argument
+src-tauri/src/
+  lib.rs            open / atomic save / watch the open file / startup state
+  folder.rs         open folder, listing, create / rename / trash, path checks
 ```
 
 ## Security
 
-- **The backend decides every file path** (from the CLI argument or a system dialog). The frontend can only submit content; it cannot name a path to read or write.
+- **The backend decides which paths are reachable.** Single files come from the command line or a system dialog, and the frontend only submits their content. Sidebar operations take paths from the frontend, but only inside the folder the user opened: every command resolves symlinks and `..` first and rejects anything outside that folder, and new names may not contain path separators.
 - Raw HTML in Markdown is not rendered (it stays visible as source), and image widgets only set `src`, so there is no HTML injection surface. The production build also enforces a CSP that blocks inline scripts and `eval`.
-- Local images are served through Tauri's asset protocol with an empty default scope; opening a file allows only that file's directory.
+- Local images are served through Tauri's asset protocol with an empty default scope; only the open folder and the open file's directory are allowed.
+- Deleting moves items to the system trash rather than removing them permanently.
+
+## Known limitations
+
+- The open folder is watched recursively. That is cheap on macOS and Windows, but on Linux (inotify) a very large folder can hit the system's watch limit.
 
 ## Roadmap
 
 - [ ] Render tables as real table widgets (needs block decorations from a StateField)
 - [ ] Math (KaTeX) and Mermaid diagrams, loaded on demand
 - [ ] Paste / drop images into `./assets/` automatically
+- [ ] Drag and drop to move files in the sidebar; search across the folder
 - [ ] File associations and macOS "Open With" (`RunEvent::Opened`)
 - [ ] Export to HTML / PDF
