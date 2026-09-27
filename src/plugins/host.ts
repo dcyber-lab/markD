@@ -13,6 +13,7 @@ import {
   type MarkdPlugin,
   type NodeRenderer,
   type PluginApp,
+  type SettingsSection,
 } from "./api";
 
 type Listener = (payload: never) => void;
@@ -47,6 +48,8 @@ export class PluginHost {
   private readonly renderers = new Map<string, NodeRenderer[]>();
   private readonly extensions: Extension[] = [];
   private readonly listeners = new Map<string, Set<Listener>>();
+  private readonly points = new Map<string, unknown[]>();
+  private readonly sections: SettingsSection[] = [];
   private readonly active = new Map<string, { plugin: MarkdPlugin; disposers: Disposable[] }>();
   private readonly slot = new Compartment();
   private view: EditorView | null = null;
@@ -63,6 +66,11 @@ export class PluginHost {
 
   attach(view: EditorView) {
     this.view = view;
+  }
+
+  /** Sections for the Settings dialog, in the order plugins added them. */
+  settingsSections(): readonly SettingsSection[] {
+    return this.sections;
   }
 
   private contributions(): Extension {
@@ -142,6 +150,15 @@ export class PluginHost {
       commands: {
         add: (command) => track(this.addCommand(command)),
       },
+      extensionPoint: <T,>(id: string) => {
+        let items = this.points.get(id) as T[] | undefined;
+        if (!items) this.points.set(id, (items = []));
+        const list = items;
+        return { add: (item: T) => track(this.add(list, item, false)), items: () => list };
+      },
+      settings: {
+        addSection: (section) => track(this.add(this.sections, section, false)),
+      },
       markdown: {
         addSyntax: (extension) => track(this.add(this.syntax, extension)),
       },
@@ -160,6 +177,7 @@ export class PluginHost {
             this.changed();
           });
         },
+        refresh: () => this.changed(),
       },
       editor: {
         addExtension: (extension) => track(this.add(this.extensions, extension)),

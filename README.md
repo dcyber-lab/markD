@@ -49,6 +49,7 @@ git push origin v0.2.0
 | ⌘/Ctrl + Shift + E | Show / hide the sidebar |
 | ⌘/Ctrl + \ | Toggle live rendering / source mode |
 | ⌘/Ctrl + F | Find and replace |
+| ⌘/Ctrl + , | Settings |
 | ⌘/Ctrl + click a link | Open it in the system browser |
 
 ## Features
@@ -58,6 +59,14 @@ git push origin v0.2.0
 **Folder sidebar:** open a folder to browse its subfolders and Markdown files (hidden entries are skipped; folders load lazily as you expand them). Right-click for New File, New Folder, Rename (inline), Move to Trash, and Reveal in Finder / Explorer. The tree follows changes made on disk, and the last folder, expanded folders, and sidebar width are restored on the next launch. Switching files from the sidebar saves unsaved changes first; an untitled document asks before discarding.
 
 **Images:** paste an image (e.g. a screenshot) or drop image files onto the window, and markd stores them in an `assets/` folder next to the document and inserts a relative link such as `![](assets/image-20260927-161305.png)`. Existing names are never overwritten (`-1`, `-2`, ... are appended), and images already in `assets/` are linked rather than copied. An untitled document is saved first so the images have somewhere to go.
+
+**S3 image storage:** images can go to any S3-compatible bucket instead (AWS S3, Cloudflare R2, MinIO, Aliyun OSS, ...) that is publicly readable, directly or through a CDN. Links point at the public URL, so documents render anywhere. Uploaded keys include a content hash (`images/image-20260927-172012-9bb75220fd.png`), so nothing is overwritten. markd displays these images through a local cache, so they still show offline once seen. Configure it in Settings (⌘/Ctrl + ,) and use "Save and test" to check the upload and public read. Choose the default storage in Settings; a document can override it in its front matter:
+
+```markdown
+---
+image-storage: s3   # or local
+---
+```
 
 ## Plugins
 
@@ -81,15 +90,17 @@ export const example: MarkdPlugin = {
 |---|---|
 | `commands.add` | Commands with optional key bindings (`Mod-Shift-o`; `Mod` is ⌘ on macOS, Ctrl elsewhere) |
 | `markdown.addSyntax` | Extend the parser with a [`@lezer/markdown`](https://github.com/lezer-parser/markdown) extension, e.g. `$math$` or `[[wiki links]]` |
-| `render.node` | Render syntax nodes in live mode: hide markup, add classes, replace ranges with widgets |
+| `render.node`, `render.refresh` | Render syntax nodes in live mode: hide markup, add classes, replace ranges with widgets |
 | `editor.addExtension` | Any CodeMirror extension: themes, keymaps, DOM event handlers, view plugins |
 | `statusBar.add` | An element in the status bar |
 | `events.on` | `doc-opened`, `doc-changed`, `doc-saved`, `folder-opened` |
 | `workspace` | The open document, `ensureSaved()`, status messages |
+| `extensionPoint` | Named lists plugins use to extend each other (the S3 plugin adds a store to `markd.images.stores`) |
+| `settings.addSection` | A section in the Settings dialog |
 
 Everything a plugin registers is undone when it is deactivated, and errors thrown by a plugin's renderers or listeners are reported in the status bar instead of breaking the editor.
 
-Built-in plugins live in `src/plugins/builtin/`: basic formatting, lists and tasks, code blocks, tables, images, and word count.
+Built-in plugins live in `src/plugins/builtin/`: basic formatting, lists and tasks, code blocks, tables, front matter, images, S3 image storage, and word count.
 
 Loading third-party plugins from a plugins folder is the next step. Plugins will run with the same privileges as the app itself (like Obsidian's), so the backend's folder-scoped path checks stay the security boundary.
 
@@ -105,12 +116,16 @@ src/
     host.ts         loads plugins, collects their contributions, isolates their errors
     builtin/        built-in features, one plugin each
   sidebar.ts        folder tree, context menu, inline rename, resizing
+  settings-dialog.ts  the Settings dialog (sections come from plugins)
+  dom.ts            small element-building helper
   platform.ts       platform helpers (⌘ vs Ctrl, "Reveal in Finder" label)
   api.ts            typed wrappers for backend commands
 src-tauri/src/
   lib.rs            open / atomic save / watch the open file / startup state
   folder.rs         open folder, listing, create / rename / trash, path checks
   images.rs         store pasted and dropped images in assets/
+  settings.rs       settings file; the S3 secret lives in the OS keychain
+  s3.rs             S3 uploads, connection test, markd-cache:// image cache
 ```
 
 ## Security
@@ -120,6 +135,8 @@ src-tauri/src/
 - Local images are served through Tauri's asset protocol with an empty default scope; only the open folder and the open file's directory are allowed.
 - Pasted images reach the backend as bytes only, and dropped files are read from the OS drop event in Rust, so the frontend never names a source or destination path. Images always land in the open document's `assets/` folder, with the suggested name reduced to a plain file name with an image extension.
 - Deleting moves items to the system trash rather than removing them permanently.
+- The S3 secret access key is stored in the OS keychain (Keychain, Credential Manager, Secret Service), never in a file, and never sent to the frontend: uploads are signed in Rust.
+- `markd-cache://` only serves URLs under the configured S3 public URL, so it cannot be used to fetch arbitrary addresses.
 
 ## Known limitations
 
