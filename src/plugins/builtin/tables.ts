@@ -251,6 +251,13 @@ const theme = EditorView.baseTheme({
   },
 });
 
+/**
+ * Widgets by table source. Block renderers run for every table on every edit, so an unchanged table
+ * reuses its widget instead of being parsed again. A widget only holds offsets relative to the
+ * table, so it stays valid wherever the table moves.
+ */
+const widgets = new Map<string, TableWidget | null>();
+
 export const tables: MarkdPlugin = {
   id: "markd.tables",
   name: "Tables",
@@ -259,10 +266,15 @@ export const tables: MarkdPlugin = {
     app.editor.addExtension(theme);
     app.render.node("Table", (node, ctx) => ctx.lineClass(node.from, node.to, "cm-lp-table"));
     app.render.block("Table", (node, state) => {
-      const table = parseTable(state, node.node);
-      if (!table) return null;
       const source = state.sliceDoc(state.doc.lineAt(node.from).from, state.doc.lineAt(node.to).to);
-      return new TableWidget(source, table);
+      let widget = widgets.get(source);
+      if (widget === undefined) {
+        const table = parseTable(state, node.node);
+        widget = table && new TableWidget(source, table);
+        if (widgets.size >= 2000) widgets.delete(widgets.keys().next().value!);
+        widgets.set(source, widget);
+      }
+      return widget;
     });
   },
 };

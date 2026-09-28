@@ -1,5 +1,6 @@
 import type { MarkdPlugin } from "../api";
 import { alerts } from "./alerts";
+import { appearance } from "./appearance";
 import { basics } from "./basics";
 import { codeBlocks } from "./code-blocks";
 import { emojiShortcodes } from "./emoji";
@@ -15,6 +16,7 @@ import { wordCount } from "./word-count";
 
 /** Features that ship with markd, written against the same API as third-party plugins. */
 export const builtinPlugins: MarkdPlugin[] = [
+  appearance,
   basics,
   lists,
   codeBlocks,

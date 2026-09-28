@@ -55,7 +55,8 @@ export type NodeRenderer = (node: SyntaxNodeRef, ctx: RenderContext) => void | f
  * Renders a top-level block node (e.g. `"Table"`) as one widget that replaces all of its lines in
  * live mode while the selection is outside them. Return null, or throw, to show the source instead.
  * Blocks nested in lists or blockquotes are not offered, since their lines carry markup of the
- * enclosing block.
+ * enclosing block. A block is rendered again when its own text changes, or on `render.refresh()`,
+ * so the widget should depend only on the block's text (and plugin state that calls refresh).
  */
 export type BlockRenderer = (node: SyntaxNodeRef, state: EditorState) => WidgetType | null;
 
@@ -110,6 +111,11 @@ export interface PluginApp {
     block(names: string | string[], renderer: BlockRenderer): Disposable;
     /** Re-render live mode, e.g. after a setting that renderers depend on changed. */
     refresh(): void;
+    /**
+     * Whether live rendering is on. State that only renderers use (a state field walking the whole
+     * document, say) can skip its work in source mode, which large documents open in.
+     */
+    isLive(state: EditorState): boolean;
   };
 
   editor: {

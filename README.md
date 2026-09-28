@@ -50,6 +50,7 @@ git push origin v0.2.0
 | ⌘/Ctrl + \ | Toggle live rendering / source mode |
 | ⌘/Ctrl + F | Find and replace |
 | ⌘/Ctrl + , | Settings |
+| ⌘/Ctrl + = / − | Zoom in / out |
 | ⌘/Ctrl + click a link | Web links open in the browser, `#heading` scrolls to it, relative links to Markdown files in the open folder open in markd |
 
 ## Features
@@ -64,6 +65,8 @@ git push origin v0.2.0
 - **Emoji:** GitHub shortcodes such as `:rocket:`.
 
 Anything that cannot be rendered stays as written: a formula KaTeX rejects (underlined), a diagram Mermaid cannot parse, a reference to an undefined label, an unknown emoji name. KaTeX, Mermaid and the emoji list load the first time a document needs them.
+
+**Appearance:** Settings → Appearance sets the theme (follow the system, light or dark), the text and code fonts, font size, line height and text width. Changes apply as you make them and are kept per machine.
 
 **Folder sidebar:** open a folder to browse its subfolders and Markdown files (hidden entries are skipped; folders load lazily as you expand them). Right-click for New File, New Folder, Rename (inline), Move to Trash, and Reveal in Finder / Explorer. The tree follows changes made on disk, and the last folder, expanded folders, and sidebar width are restored on the next launch. Switching files from the sidebar saves unsaved changes first; an untitled document asks before discarding.
 
@@ -100,6 +103,7 @@ export const example: MarkdPlugin = {
 | `commands.add` | Commands with optional key bindings (`Mod-Shift-o`; `Mod` is ⌘ on macOS, Ctrl elsewhere) |
 | `markdown.addSyntax` | Extend the parser with a [`@lezer/markdown`](https://github.com/lezer-parser/markdown) extension, e.g. `$math$` or `[[wiki links]]` |
 | `render.node`, `render.refresh` | Render syntax nodes in live mode: hide markup, add classes, replace ranges with widgets |
+| `render.isLive` | Whether live rendering is on, for state that only renderers need (skip the work in source mode) |
 | `render.block` | Replace a whole top-level block (e.g. a table) with one widget while the cursor is outside it; returning null keeps the source |
 | `editor.addExtension` | Any CodeMirror extension: themes, keymaps, DOM event handlers, view plugins |
 | `statusBar.add` | An element in the status bar |
@@ -152,6 +156,7 @@ src-tauri/src/
 ## Known limitations
 
 - The open folder is watched recursively. That is cheap on macOS and Windows, but on Linux (inotify) a very large folder can hit the system's watch limit.
+- Files over about 20 MB open in source mode, with a note in the status bar; ⌘/Ctrl + \ still turns on live rendering for that file (the choice is not remembered). Live rendering is slower there, and the Markdown parser only runs a limited distance ahead of the visible text, so after jumping far into a very large file the text shows as source until parsing catches up (for files of about 50 MB and more, it may not).
 
 ## Roadmap
 

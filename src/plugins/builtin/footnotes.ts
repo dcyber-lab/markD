@@ -1,7 +1,7 @@
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState } from "@codemirror/state";
+import { type EditorState, StateField, type Transaction } from "@codemirror/state";
 import { EditorView, WidgetType } from "@codemirror/view";
-import type { SyntaxNode, Tree } from "@lezer/common";
+import type { SyntaxNode } from "@lezer/common";
 import { tags } from "@lezer/highlight";
 import type { Element, MarkdownConfig } from "@lezer/markdown";
 import { hasModKey } from "../../platform";
@@ -73,7 +73,7 @@ const footnoteSyntax: MarkdownConfig = {
   ],
 };
 
-interface Footnotes {
+export interface Footnotes {
   /** Footnote numbers by normalized label, for defined footnotes that are referenced. */
   numbers: Map<string, number>;
   /** Start of each footnote's definition. */
@@ -82,8 +82,6 @@ interface Footnotes {
   references: Map<string, number>;
 }
 
-const cache = new WeakMap<Tree, Footnotes>();
-
 function labelOf(state: EditorState, node: SyntaxNode): string {
   const label = node.getChild("FootnoteLabel");
   return label ? normalizeLabel(state.sliceDoc(label.from, label.to)) : "";
@@ -91,10 +89,8 @@ function labelOf(state: EditorState, node: SyntaxNode): string {
 
 const SKIP = new Set(["FencedCode", "CodeBlock", "InlineCode", "HTMLBlock", "Table"]);
 
-function footnotes(state: EditorState): Footnotes {
+function collect(state: EditorState): Footnotes {
   const tree = syntaxTree(state);
-  let notes = cache.get(tree);
-  if (notes) return notes;
   const definitions = new Map<string, number>();
   const refs: [string, number][] = [];
   tree.iterate({
@@ -110,14 +106,78 @@ function footnotes(state: EditorState): Footnotes {
       }
     },
   });
-  notes = { numbers: new Map(), definitions, references: new Map() };
+  const notes: Footnotes = { numbers: new Map(), definitions, references: new Map() };
   for (const [label, pos] of refs) {
     if (!definitions.has(label) || notes.numbers.has(label)) continue;
     notes.numbers.set(label, notes.numbers.size + 1);
     notes.references.set(label, pos);
   }
-  cache.set(tree, notes);
   return notes;
+}
+
+/** Text that can make or break footnote syntax, or move it in or out of code, math or HTML. */
+const STRUCTURAL = /[[\]^:\\`~$<>|\n]/;
+
+/** Whether an edit touches a footnote reference, or the `[^label]:` start of a definition. */
+function touchesFootnote(state: EditorState, from: number, to: number): boolean {
+  let hit = false;
+  syntaxTree(state).iterate({
+    from: Math.max(0, from - 1),
+    to: Math.min(state.doc.length, to + 1),
+    enter(node) {
+      if (hit) return false;
+      if (node.name === "FootnoteReference") hit = true;
+      else if (node.name === "FootnoteDefinition") {
+        const marks = node.node.getChildren("FootnoteMark");
+        if (from <= (marks[1]?.to ?? node.to) + 1) hit = true;
+      }
+    },
+  });
+  return hit;
+}
+
+/** Whether replacing `fromA..toA` of the old document with `inserted` could change footnotes. */
+function structural(tr: Transaction, fromA: number, toA: number, fromB: number, inserted: string): boolean {
+  const old = tr.startState;
+  const removed = old.sliceDoc(fromA, toA);
+  if (STRUCTURAL.test(inserted) || STRUCTURAL.test(removed)) return true;
+  if (touchesFootnote(old, fromA, toA)) return true;
+  // A line that is or becomes blank can end a footnote's continuation lines or start an indented
+  // code block below it; indentation at the start of a line can make or undo such a block.
+  const blank = /^[ \t]*$/;
+  if (blank.test(old.doc.lineAt(fromA).text) || blank.test(tr.state.doc.lineAt(fromB).text)) return true;
+  const line = old.doc.lineAt(fromA);
+  return blank.test(old.sliceDoc(line.from, fromA)) && /[ \t]/.test(inserted + removed);
+}
+
+/** Set on activation: whether live rendering is on, the only case where footnotes are shown. */
+let isLive: (state: EditorState) => boolean = () => true;
+
+/**
+ * Footnotes of the document, or null in source mode, where nothing shows them. Collecting them
+ * walks the whole tree, so an edit that cannot change them (typing words, which is most edits)
+ * only moves the positions along.
+ */
+const footnoteField = StateField.define<Footnotes | null>({
+  create: (state) => (isLive(state) ? collect(state) : null),
+  update(notes, tr) {
+    if (!isLive(tr.state)) return null;
+    if (!notes) return collect(tr.state);
+    if (!tr.docChanged) return syntaxTree(tr.startState) === syntaxTree(tr.state) ? notes : collect(tr.state);
+    let changed = false;
+    tr.changes.iterChanges((fromA, toA, fromB, _toB, inserted) => {
+      changed ||= structural(tr, fromA, toA, fromB, inserted.toString());
+    });
+    if (changed) return collect(tr.state);
+    const move = (positions: Map<string, number>) =>
+      new Map([...positions].map(([label, pos]) => [label, tr.changes.mapPos(pos)] as const));
+    return { numbers: notes.numbers, definitions: move(notes.definitions), references: move(notes.references) };
+  },
+});
+
+/** The footnotes of a document: numbers by label, and where each is defined and first referenced. */
+export function footnotes(state: EditorState): Footnotes {
+  return state.field(footnoteField, false) ?? collect(state);
 }
 
 function jump(view: EditorView, pos: number | undefined) {
@@ -180,8 +240,9 @@ export const footnotesPlugin: MarkdPlugin = {
   name: "Footnotes",
 
   activate(app) {
+    isLive = app.render.isLive;
     app.markdown.addSyntax(footnoteSyntax);
-    app.editor.addExtension(theme);
+    app.editor.addExtension([theme, footnoteField]);
 
     app.render.node("FootnoteReference", (node, ctx) => {
       if (ctx.isActive(node.from, node.to)) return false;

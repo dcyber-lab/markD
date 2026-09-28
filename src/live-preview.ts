@@ -132,12 +132,20 @@ interface Block {
   widget: WidgetType;
 }
 
-/** Top-level blocks some renderer can draw, spanning whole lines. Nodes it declines keep their source. */
-function findBlocks(state: EditorState): Block[] {
+/**
+ * Top-level blocks some renderer can draw, spanning whole lines, among the top-level nodes that
+ * reach into `from..to`. Nodes a renderer declines keep their source. Also returns the extent of
+ * all those nodes, which is the region these blocks replace.
+ */
+function findBlocks(state: EditorState, from = 0, to = state.doc.length) {
   const renderers = state.facet(blockRenderers);
   const blocks: Block[] = [];
-  if (renderers.size === 0) return blocks;
-  for (let node = syntaxTree(state).topNode.firstChild; node; node = node.nextSibling) {
+  let spanFrom = from;
+  let spanTo = to;
+  if (renderers.size === 0) return { blocks, spanFrom, spanTo };
+  for (let node = syntaxTree(state).topNode.childAfter(from); node && node.from <= to; node = node.nextSibling) {
+    spanFrom = Math.min(spanFrom, node.from);
+    spanTo = Math.max(spanTo, node.to);
     const list = renderers.get(node.name);
     if (!list) continue;
     const first = state.doc.lineAt(node.from);
@@ -151,7 +159,48 @@ function findBlocks(state: EditorState): Block[] {
       }
     }
   }
-  return blocks;
+  return { blocks, spanFrom, spanTo };
+}
+
+/**
+ * Blocks after an edit. Rendering every block on every keystroke made typing slow in long
+ * documents, so only the top-level nodes whose structure may have changed are rendered again; the
+ * other blocks keep their widgets and move with the text.
+ *
+ * An edit can change the node before it (a `|---|` or `===` line turns the line above into a table
+ * or heading) and any number of nodes after it (opening a code fence swallows everything below).
+ * So the region starts one node before the edit and runs until a node matches the old tree again,
+ * with the same type and the same (mapped) extent, the way incremental parsing resynchronizes.
+ */
+function updateBlocks(blocks: readonly Block[], tr: Transaction): Block[] {
+  const oldTop = syntaxTree(tr.startState).topNode;
+  const newTop = syntaxTree(tr.state).topNode;
+  const back = tr.changes.invertedDesc;
+  let lo = tr.state.doc.length;
+  let hi = 0;
+  tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+    lo = Math.min(lo, fromB);
+    hi = Math.max(hi, toB);
+  });
+  const atEdit = newTop.childBefore(lo);
+  const from = (atEdit?.prevSibling ?? atEdit)?.from ?? 0;
+  let to = hi;
+  for (let node = newTop.childAfter(hi); node; node = node.nextSibling) {
+    if (node.from > hi) {
+      const oldFrom = back.mapPos(node.from, 1);
+      const old = oldTop.childAfter(oldFrom);
+      if (old && old.name === node.name && old.from === oldFrom && old.to === back.mapPos(node.to, -1)) break;
+    }
+    to = node.to;
+  }
+  const fresh = findBlocks(tr.state, from, to);
+  const kept: Block[] = [];
+  for (const block of blocks) {
+    const bFrom = tr.changes.mapPos(block.from, 1);
+    const bTo = tr.changes.mapPos(block.to, -1);
+    if (bFrom <= bTo && (bTo < fresh.spanFrom || bFrom > fresh.spanTo)) kept.push({ from: bFrom, to: bTo, widget: block.widget });
+  }
+  return [...kept, ...fresh.blocks].sort((a, b) => a.from - b.from);
 }
 
 function blockDecorations(state: EditorState, blocks: readonly Block[]): DecorationSet {
@@ -162,20 +211,23 @@ function blockDecorations(state: EditorState, blocks: readonly Block[]): Decorat
   );
 }
 
-/** Blocks are found again when the document or tree changes; moving the cursor only re-filters them. */
+/**
+ * Edits render the blocks around them again; new renderers, or a tree that grew without an edit
+ * (background parsing), render all blocks. Moving the cursor only re-filters them.
+ */
 const blockPreview = StateField.define<{ blocks: Block[]; decorations: DecorationSet }>({
   create(state) {
-    const blocks = findBlocks(state);
+    const { blocks } = findBlocks(state);
     return { blocks, decorations: blockDecorations(state, blocks) };
   },
   update(value, tr: Transaction) {
     const { startState, state } = tr;
-    if (
-      tr.docChanged ||
-      syntaxTree(startState) !== syntaxTree(state) ||
-      startState.facet(blockRenderers) !== state.facet(blockRenderers)
-    ) {
-      const blocks = findBlocks(state);
+    if (startState.facet(blockRenderers) !== state.facet(blockRenderers) || (!tr.docChanged && syntaxTree(startState) !== syntaxTree(state))) {
+      const { blocks } = findBlocks(state);
+      return { blocks, decorations: blockDecorations(state, blocks) };
+    }
+    if (tr.docChanged) {
+      const blocks = updateBlocks(value.blocks, tr);
       return { blocks, decorations: blockDecorations(state, blocks) };
     }
     if (tr.selection) return { blocks: value.blocks, decorations: blockDecorations(state, value.blocks) };
@@ -227,3 +279,8 @@ const blockKeys = Prec.high(
 );
 
 export const livePreview = [inlinePreview, blockPreview, blockKeys];
+
+/** Whether live rendering is on in `state` (its extensions are only present in live mode). */
+export function isLive(state: EditorState): boolean {
+  return state.field(blockPreview, false) !== undefined;
+}

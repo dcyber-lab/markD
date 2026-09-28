@@ -11,7 +11,10 @@ use notify_debouncer_mini::{
     DebounceEventResult, Debouncer,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{
+    ipc::{InvokeBody, Request, Response},
+    AppHandle, Emitter, Manager, State,
+};
 use tauri_plugin_dialog::DialogExt;
 
 mod folder;
@@ -24,13 +27,15 @@ const MD_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "txt"];
 /// A document sent to the frontend. Paths are decided only by the backend (a CLI argument or
 /// a file the user picked in a system dialog). The frontend cannot read or write arbitrary paths,
 /// so even a malicious script smuggled into a document cannot reach other files.
+///
+/// The text itself travels separately as raw UTF-8 ([`document_content`], and the body of
+/// [`save_file`]): encoding a large document as a JSON string took seconds and several copies.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DocInfo {
     path: String,
     dir: String,
     name: String,
-    content: String,
 }
 
 struct OpenDoc {
@@ -53,7 +58,7 @@ fn io_err(path: &Path, e: impl std::fmt::Display) -> String {
     format!("{}: {e}", path.display())
 }
 
-fn doc_info(path: &Path, content: String) -> DocInfo {
+fn doc_info(path: &Path) -> DocInfo {
     DocInfo {
         path: path.display().to_string(),
         dir: path.parent().unwrap_or(path).display().to_string(),
@@ -61,8 +66,15 @@ fn doc_info(path: &Path, content: String) -> DocInfo {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
-        content,
     }
+}
+
+/// The document text sent by the frontend as a raw UTF-8 request body.
+fn raw_text<'a>(request: &'a Request<'_>) -> Result<&'a str, String> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected the document as raw UTF-8".into());
+    };
+    std::str::from_utf8(bytes).map_err(|e| format!("document is not valid UTF-8: {e}"))
 }
 
 /// Make `path` the current document: allow its directory on the asset protocol (for relative image
@@ -91,7 +103,7 @@ fn track(app: &AppHandle, path: PathBuf, content: String) -> Result<DocInfo, Str
         .watch(&dir, RecursiveMode::NonRecursive)
         .map_err(|e| io_err(&dir, e))?;
 
-    let info = doc_info(&path, content.clone());
+    let info = doc_info(&path);
     *app.state::<AppState>().doc.lock().unwrap() = Some(OpenDoc {
         path,
         on_disk: content,
@@ -120,9 +132,10 @@ fn reload_from_disk(app: &AppHandle, path: &Path) {
     if doc.on_disk == content {
         return;
     }
-    doc.on_disk = content.clone();
+    doc.on_disk = content;
     drop(guard);
-    let _ = app.emit("file-changed", content);
+    // The frontend fetches the new text with `document_content`.
+    let _ = app.emit("file-changed", ());
 }
 
 /// Write to a temp file in the same directory, then rename it over the target, so a crash mid-write
@@ -195,17 +208,29 @@ async fn open_file(app: AppHandle) -> Result<Option<DocInfo>, String> {
     open_path(&app, &path).map(Some)
 }
 
+/// The text of the current document as it is on disk, as raw UTF-8.
 #[tauri::command]
-async fn save_file(state: State<'_, AppState>, content: String) -> Result<(), String> {
+async fn document_content(state: State<'_, AppState>) -> Result<Response, String> {
+    let guard = state.doc.lock().unwrap();
+    let doc = guard.as_ref().ok_or("no document is open")?;
+    Ok(Response::new(doc.on_disk.clone().into_bytes()))
+}
+
+/// Save the current document; the request body is its text as raw UTF-8.
+#[tauri::command]
+async fn save_file(state: State<'_, AppState>, request: Request<'_>) -> Result<(), String> {
+    let content = raw_text(&request)?;
     let mut guard = state.doc.lock().unwrap();
     let doc = guard.as_mut().ok_or("the current document has no file path yet")?;
-    write_atomic(&doc.path, &content)?;
-    doc.on_disk = content;
+    write_atomic(&doc.path, content)?;
+    doc.on_disk = content.to_owned();
     Ok(())
 }
 
+/// Save under a name picked in a system dialog; the request body is the text as raw UTF-8.
 #[tauri::command]
-async fn save_file_as(app: AppHandle, content: String) -> Result<Option<DocInfo>, String> {
+async fn save_file_as(app: AppHandle, request: Request<'_>) -> Result<Option<DocInfo>, String> {
+    let content = raw_text(&request)?;
     let Some(picked) = app
         .dialog()
         .file()
@@ -216,9 +241,9 @@ async fn save_file_as(app: AppHandle, content: String) -> Result<Option<DocInfo>
         return Ok(None);
     };
     let path = picked.into_path().map_err(|e| e.to_string())?;
-    write_atomic(&path, &content)?;
+    write_atomic(&path, content)?;
     let path = dunce::canonicalize(&path).map_err(|e| io_err(&path, e))?;
-    track(&app, path, content).map(Some)
+    track(&app, path, content.to_owned()).map(Some)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -236,6 +261,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             initial_state,
             open_file,
+            document_content,
             save_file,
             save_file_as,
             folder::open_folder,
