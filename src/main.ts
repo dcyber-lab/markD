@@ -7,12 +7,14 @@ import { createEditor, type Mode } from "./editor";
 import type { Command } from "./plugins/api";
 import { builtinPlugins } from "./plugins/builtin";
 import { PluginHost } from "./plugins/host";
+import { Outline } from "./outline";
 import { openSettings } from "./settings-dialog";
 import { Sidebar } from "./sidebar";
 
 const appWindow = getCurrentWindow();
 const workspaceEl = document.querySelector<HTMLElement>("#workspace")!;
 const statusEl = document.querySelector<HTMLElement>("#status")!;
+const saveStateEl = document.querySelector<HTMLElement>("#save-state")!;
 const modeButton = document.querySelector<HTMLButtonElement>("#mode-toggle")!;
 const sidebarButton = document.querySelector<HTMLButtonElement>("#sidebar-toggle")!;
 const settingsButton = document.querySelector<HTMLButtonElement>("#settings-toggle")!;
@@ -25,6 +27,8 @@ const MODE_KEY = "markd.mode";
  * view, so far into such a file there would be nothing to render anyway.
  */
 const LARGE_DOC_CHARS = 20 * 1024 * 1024;
+/** A document with a file is saved this long after the last edit. */
+const AUTOSAVE_MS = 1000;
 
 let doc: DocInfo | null = null;
 /** The mode the user chose, kept across sessions. */
@@ -33,7 +37,15 @@ let preferredMode: Mode = readMode();
 let mode: Mode = preferredMode;
 /** The open document is over LARGE_DOC_CHARS. */
 let largeDoc = false;
+/** The open file is not Markdown: shown as highlighted source, never rendered. */
+let codeDoc = false;
 let windowTitle = "";
+let autosaveTimer = 0;
+/** The last save started. Saves run one at a time, so an older text never lands on disk last. */
+let saving: Promise<unknown> = Promise.resolve();
+/** When this document was last written by markd, shown in the status bar. */
+let lastSaved: Date | null = null;
+let saveFailed = false;
 
 // Plugins start before the editor exists so their contributions are part of its first state.
 const host = new PluginHost(document.querySelector<HTMLElement>("#status-items")!, {
@@ -47,13 +59,16 @@ const host = new PluginHost(document.querySelector<HTMLElement>("#status-items")
 });
 for (const plugin of builtinPlugins) host.activate(plugin);
 
+const outline = new Outline(document.querySelector<HTMLElement>("#outline")!);
+
 const editor = createEditor(document.querySelector<HTMLElement>("#editor")!, {
   mode,
   onChange() {
-    refreshTitle();
+    refreshDocState();
+    scheduleAutosave();
     host.emit("doc-changed", undefined);
   },
-  extensions: () => host.extension(),
+  extensions: () => [host.extension(), outline.extension],
 });
 host.attach(editor.view);
 /** Content matching what is on disk, used to detect unsaved changes. */
@@ -66,7 +81,7 @@ const sidebar = new Sidebar(document.querySelector<HTMLElement>("#sidebar")!, {
     doc = moved;
     editor.setBaseDir(moved.dir);
     sidebar.setActive(moved.path);
-    refreshTitle();
+    refreshDocState();
     setStatus(`Renamed to ${moved.path}`);
   },
   docRemoved() {
@@ -92,7 +107,32 @@ function setStatus(message: string, kind: "info" | "error" = "info") {
   statusEl.dataset.kind = kind;
 }
 
-function refreshTitle() {
+function formatSaveTime(date: Date): string {
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  if (date.toDateString() === new Date().toDateString()) return time;
+  return `${date.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+}
+
+/** The window title, and the status bar's note on when the document was saved. */
+function refreshDocState() {
+  let note = "";
+  let hint = "";
+  if (!doc) {
+    if (isDirty()) {
+      note = "Not saved";
+      hint = "Untitled documents are not saved automatically: ⌘/Ctrl+S to save";
+    }
+  } else if (saveFailed) {
+    note = "Save failed";
+    hint = `Could not write ${doc.path}; markd tries again after the next edit`;
+  } else if (lastSaved) {
+    note = `Saved ${formatSaveTime(lastSaved)}`;
+    hint = `Saved to ${doc.path} (saved automatically as you type)`;
+  }
+  saveStateEl.textContent = note;
+  saveStateEl.title = hint;
+  saveStateEl.dataset.kind = saveFailed ? "error" : "info";
+
   const title = `${isDirty() ? "● " : ""}${doc?.name ?? "Untitled"} — markd`;
   if (title === windowTitle) return;
   windowTitle = title;
@@ -100,21 +140,65 @@ function refreshTitle() {
   void appWindow.setTitle(title);
 }
 
+/**
+ * Write the editor's text to the open document's file, after any save already under way. Unless
+ * forced, a document with nothing unsaved is skipped by the time its turn comes.
+ */
+function writeDoc(force = false): Promise<void> {
+  const next = saving.then(async () => {
+    if (!doc || !(force || isDirty())) return;
+    // Saving is async and the user may keep typing, so remember the version we sent.
+    const snapshot = editor.view.state.doc;
+    try {
+      await backend.saveFile(snapshot.toString());
+    } catch (e) {
+      saveFailed = true;
+      refreshDocState();
+      throw e;
+    }
+    savedDoc = snapshot;
+    lastSaved = new Date();
+    if (saveFailed) setStatus(""); // the error shown was about the failed save
+    saveFailed = false;
+    refreshDocState();
+    host.emit("doc-saved", doc);
+  });
+  saving = next.catch(() => {});
+  return next;
+}
+
+function scheduleAutosave() {
+  clearTimeout(autosaveTimer);
+  if (doc) autosaveTimer = window.setTimeout(autosave, AUTOSAVE_MS);
+}
+
+/** Save a document that has a file, without a status message. An untitled one waits for Save As. */
+function autosave() {
+  clearTimeout(autosaveTimer);
+  if (doc && isDirty()) run(() => writeDoc());
+}
+
 function load(opened: OpenedDoc | null) {
+  clearTimeout(autosaveTimer);
+  lastSaved = null;
+  saveFailed = false;
   // Only the path and name are kept; the text lives in the editor.
   const info = opened && { path: opened.path, dir: opened.dir, name: opened.name };
   doc = info;
   // Pick the mode before loading, so live rendering never starts on a large document.
   largeDoc = (opened?.content.length ?? 0) > LARGE_DOC_CHARS;
-  const wanted = largeDoc ? "source" : preferredMode;
+  codeDoc = info !== null && !/\.(md|markdown|mdown|txt)$/i.test(info.name);
+  const wanted = largeDoc || codeDoc ? "source" : preferredMode;
   if (wanted !== mode) showMode(wanted);
-  modeButton.title = largeDoc
+  modeButton.title = codeDoc
+    ? "Not a Markdown file: shown as source"
+    : largeDoc
     ? "Large file: opened in source mode. ⌘/Ctrl+\\ turns on live rendering (slower)"
     : "⌘/Ctrl+\\";
-  editor.load(opened?.content ?? "", info?.dir ?? null);
+  editor.load(opened?.content ?? "", info?.dir ?? null, codeDoc ? info!.name : null);
   savedDoc = editor.view.state.doc;
   sidebar.setActive(info?.path ?? null);
-  refreshTitle();
+  refreshDocState();
   host.emit("doc-opened", info);
   editor.focus();
   if (largeDoc && opened) {
@@ -136,6 +220,7 @@ function showMode(next: Mode) {
 
 /** Switch modes. A switch on a large document applies to it only and is not remembered. */
 function setMode(next: Mode) {
+  if (codeDoc) return;
   showMode(next);
   if (largeDoc) return;
   preferredMode = next;
@@ -153,6 +238,8 @@ async function confirmDiscard(): Promise<boolean> {
 
 /** Before switching documents: save changes to a file on disk, or confirm discarding an untitled one. */
 async function leaveCurrent(): Promise<boolean> {
+  // No autosave may start while the backend switches to another document.
+  clearTimeout(autosaveTimer);
   if (!isDirty()) return true;
   if (!doc) return confirmDiscard();
   await commands.save();
@@ -197,13 +284,9 @@ const commands = {
 
   async save() {
     if (!doc) return commands.saveAs();
-    // Saving is async and the user may keep typing, so remember the version we sent.
-    const snapshot = editor.view.state.doc;
-    await backend.saveFile(snapshot.toString());
-    savedDoc = snapshot;
-    refreshTitle();
-    host.emit("doc-saved", doc);
-    setStatus(`Saved ${doc.path}`);
+    clearTimeout(autosaveTimer);
+    // The status bar's save time is the confirmation.
+    await writeDoc(true);
   },
 
   /** Returns false if the user cancelled the dialog. */
@@ -214,8 +297,10 @@ const commands = {
     doc = info;
     editor.setBaseDir(info.dir);
     savedDoc = snapshot;
+    lastSaved = new Date();
+    saveFailed = false;
     sidebar.setActive(info.path);
-    refreshTitle();
+    refreshDocState();
     host.emit("doc-saved", info);
     setStatus(`Saved ${info.path}`);
     return true;
@@ -227,6 +312,16 @@ const commands = {
 
   async toggleSidebar() {
     sidebar.toggleVisible();
+  },
+
+  /** Show the outline, or hide the sidebar if the outline is already showing. */
+  async toggleOutline() {
+    if (sidebar.visible && sidebar.tab === "outline") {
+      sidebar.toggleVisible();
+    } else {
+      sidebar.show();
+      sidebar.showTab("outline");
+    }
   },
 
   async openSettings() {
@@ -242,6 +337,7 @@ const coreCommands: Command[] = [
   { id: "file.save-as", title: "Save As…", key: "Mod-Shift-s", run: commands.saveAs },
   { id: "view.toggle-source", title: "Toggle Source Mode", key: "Mod-\\", run: commands.toggleMode },
   { id: "view.toggle-sidebar", title: "Toggle Sidebar", key: "Mod-Shift-e", run: commands.toggleSidebar },
+  { id: "view.outline", title: "Toggle Outline", key: "Mod-Shift-t", run: commands.toggleOutline },
   { id: "app.settings", title: "Settings…", key: "Mod-,", run: commands.openSettings },
 ];
 for (const command of coreCommands) host.addCommand(command);
@@ -268,15 +364,24 @@ void listen("file-changed", () =>
     if (isDirty()) return; // edited while the new text was on its way
     editor.replace(text);
     savedDoc = editor.view.state.doc;
-    refreshTitle();
+    refreshDocState();
     setStatus("File changed on disk and was reloaded");
   }),
 );
 
 void listen("tree-changed", () => run(() => sidebar.refresh()));
 
+// Switching to another app saves right away rather than after the autosave delay.
+window.addEventListener("blur", autosave);
+
+// ⌘Q comes here too (see app_menu in lib.rs).
 void appWindow.onCloseRequested(async (e) => {
-  if (!(await confirmDiscard())) e.preventDefault();
+  try {
+    if (!(await leaveCurrent())) e.preventDefault();
+  } catch (err) {
+    e.preventDefault();
+    setStatus(`Not closed: the document could not be saved (${err})`, "error");
+  }
 });
 
 showMode(mode);

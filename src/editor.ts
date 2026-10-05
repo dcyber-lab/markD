@@ -1,8 +1,9 @@
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { bracketMatching, HighlightStyle, indentOnInput, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
+import { languages } from "@codemirror/language-data";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
-import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
 import {
   drawSelection,
   dropCursor,
@@ -58,6 +59,9 @@ export interface EditorOptions {
 export function createEditor(parent: HTMLElement, opts: EditorOptions) {
   const modeSlot = new Compartment();
   const dirSlot = new Compartment();
+  const codeSlot = new Compartment();
+  /** Bumped per load, so a slow language load for a previous file is dropped. */
+  let loadId = 0;
   const modeExtension = (mode: Mode): Extension => (mode === "live" ? livePreview : highlightActiveLine());
   let mode = opts.mode;
 
@@ -76,6 +80,7 @@ export function createEditor(parent: HTMLElement, opts: EditorOptions) {
     placeholder("⌘/Ctrl+O open  ·  ⌘/Ctrl+S save  ·  ⌘/Ctrl+\\ toggle source mode"),
     modeSlot.of(modeExtension(mode)),
     dirSlot.of(baseDir.of(dir)),
+    codeSlot.of([]),
     EditorView.updateListener.of((u) => {
       if (u.docChanged) opts.onChange();
     }),
@@ -93,8 +98,18 @@ export function createEditor(parent: HTMLElement, opts: EditorOptions) {
     text: () => view.state.doc.toString(),
 
     /** Open a new document: rebuild the whole state and clear undo history. */
-    load(text: string, dir: string | null) {
+    load(text: string, dir: string | null, codeFile: string | null = null) {
+      const id = ++loadId;
       view.setState(EditorState.create({ doc: text, extensions: extensions(dir) }));
+      const desc = codeFile ? LanguageDescription.matchFilename(languages, codeFile) : null;
+      if (!desc) return;
+      // Outranks the markdown language the plugins install, so the file is highlighted as its own language.
+      void desc.load().then(
+        (support) => {
+          if (id === loadId) view.dispatch({ effects: codeSlot.reconfigure(Prec.highest(support)) });
+        },
+        () => {}, // No highlighting; the text is still editable
+      );
     },
 
     /** Reload after an external change: applied as a normal edit so it can be undone, keeping the cursor where possible. */

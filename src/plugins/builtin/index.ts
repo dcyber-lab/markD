@@ -4,6 +4,8 @@ import { appearance } from "./appearance";
 import { basics } from "./basics";
 import { codeBlocks } from "./code-blocks";
 import { emojiShortcodes } from "./emoji";
+import { sectionFolding } from "./folding";
+import { focusMode } from "./focus";
 import { footnotesPlugin } from "./footnotes";
 import { frontMatter } from "./front-matter";
 import { images } from "./images";
@@ -30,4 +32,6 @@ export const builtinPlugins: MarkdPlugin[] = [
   images,
   s3,
   wordCount,
+  sectionFolding,
+  focusMode,
 ];

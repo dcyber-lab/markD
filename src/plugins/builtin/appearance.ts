@@ -173,5 +173,18 @@ export const appearance: MarkdPlugin = {
     // Plugins start before the editor is created, so the saved look applies from the first paint.
     apply(load());
     app.settings.addSection({ id: "appearance", title: "Appearance", render: settingsSection });
+    let lastWidth = DEFAULTS.width;
+    app.commands.add({
+      id: "view.toggle-full-width",
+      title: "Toggle Full Width",
+      key: "Mod-Alt-w",
+      run: async () => {
+        const current = load();
+        if (current.width !== 0) lastWidth = current.width;
+        const next = { ...current, width: current.width === 0 ? lastWidth : 0 };
+        save(next);
+        apply(next);
+      },
+    });
   },
 };

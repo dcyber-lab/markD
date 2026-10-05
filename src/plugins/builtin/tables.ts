@@ -8,7 +8,8 @@ import type { MarkdPlugin } from "../api";
 
 // Tables render as real tables in live mode. With the cursor in a table, or when a table cannot be
 // rendered (e.g. one nested in a list), its source shows in a monospace font instead. Clicking a
-// cell puts the cursor at the end of that cell's source.
+// cell edits its source in place; the change goes into the document when the cell loses focus, so
+// the table stays rendered meanwhile.
 
 type Align = "left" | "center" | "right" | null;
 
@@ -22,6 +23,8 @@ interface Cell {
   content: Inline[];
   /** Where a click on the cell puts the cursor, relative to the start of the table. */
   offset: number;
+  /** The cell's source, relative to the start of the table; null for a cell the row does not have. */
+  span: { from: number; to: number } | null;
 }
 
 interface Table {
@@ -144,9 +147,13 @@ function parseTable(state: EditorState, node: SyntaxNode): Table | null {
     rows.push(
       header.map((_, i) => {
         const range = ranges[i];
-        if (!range) return { content: [], offset: line.to - start };
+        if (!range) return { content: [], offset: line.to - start, span: null };
         const cell = cellNodes.find((c) => c.from >= range.from && c.to <= range.to) ?? null;
-        return { content: inline(state, cell, range.from, range.to), offset: range.to - start };
+        return {
+          content: inline(state, cell, range.from, range.to),
+          offset: range.to - start,
+          span: { from: range.from - start, to: range.to - start },
+        };
       }),
     );
   }
@@ -195,6 +202,10 @@ class TableWidget extends WidgetType {
           const el = h(tag, {}, ...cell.content.map(inlineDOM));
           if (align[i]) el.style.textAlign = align[i];
           el.dataset.offset = String(cell.offset);
+          if (cell.span) {
+            el.dataset.from = String(cell.span.from);
+            el.dataset.to = String(cell.span.to);
+          }
           return el;
         }),
       );
@@ -205,21 +216,73 @@ class TableWidget extends WidgetType {
       h("table", {}, h("thead", {}, row(header, "th")), h("tbody", {}, ...body.map((r) => row(r, "td")))),
     );
 
+    // The cell being edited, with what it showed before.
+    let editing: { el: HTMLElement; shown: Node[] } | null = null;
+
+    const finish = (commit: boolean) => {
+      if (!editing) return;
+      const { el, shown } = editing;
+      editing = null;
+      el.removeAttribute("contenteditable");
+      el.classList.remove("cm-lp-cell-editing");
+      // A pipe would split the cell, and a line break would end the row.
+      const text = (el.textContent ?? "").replace(/\s*\n\s*/g, " ").replace(/(?<!\\)\|/g, "\\|").trim();
+      const from = Number(el.dataset.from);
+      const to = Number(el.dataset.to);
+      if (!commit || text === this.source.slice(from, to)) {
+        el.replaceChildren(...shown);
+        return;
+      }
+      const start = view.posAtDOM(wrap);
+      view.dispatch({ changes: { from: start + from, to: start + to, insert: text } });
+    };
+
+    const edit = (el: HTMLElement) => {
+      editing = { el, shown: [...el.childNodes] };
+      el.textContent = this.source.slice(Number(el.dataset.from), Number(el.dataset.to));
+      el.classList.add("cm-lp-cell-editing");
+      el.contentEditable = "plaintext-only";
+      if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const selection = getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    };
+
     wrap.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
-      event.preventDefault();
       const target = event.target as HTMLElement;
+      const cell = target.closest<HTMLElement>("[data-offset]");
+      if (cell && editing?.el === cell) return; // moving the caret inside the cell
+      event.preventDefault();
       const url = target.closest<HTMLElement>("[data-url]")?.dataset.url;
       if (url && hasModKey(event) && /^(https?|mailto):/i.test(url)) {
         void openUrl(url);
         return;
       }
-      // Editing a cell: put the cursor in its source, which makes the table show as source.
-      const cell = target.closest<HTMLElement>("[data-offset]");
+      finish(true);
+      if (cell?.dataset.from !== undefined) {
+        edit(cell);
+        return;
+      }
+      // A cell the row does not have, or the space around the cells: edit the source instead.
       const offset = cell ? Number(cell.dataset.offset) : this.source.length;
       view.dispatch({ selection: { anchor: view.posAtDOM(wrap) + offset } });
       view.focus();
     });
+    wrap.addEventListener("keydown", (event) => {
+      if (!editing) return;
+      if (event.key === "Enter" || event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(event.key === "Enter");
+        view.focus();
+      }
+    });
+    wrap.addEventListener("focusout", () => finish(true));
     return wrap;
   }
 }
@@ -235,8 +298,11 @@ const theme = EditorView.baseTheme({
     overflowX: "auto",
     cursor: "text",
   },
+  // Columns keep a readable width and the table scrolls sideways, rather than squeezing to fit.
   ".cm-lp-table-widget table": {
     borderCollapse: "collapse",
+    width: "max-content",
+    minWidth: "100%",
     lineHeight: "1.5",
   },
   ".cm-lp-table-widget th, .cm-lp-table-widget td": {
@@ -244,6 +310,14 @@ const theme = EditorView.baseTheme({
     padding: "4px 12px",
     textAlign: "left",
     verticalAlign: "top",
+    minWidth: "6em",
+    maxWidth: "36em",
+  },
+  ".cm-lp-cell-editing": {
+    outline: "2px solid var(--accent)",
+    outlineOffset: "-2px",
+    fontFamily: "var(--font-mono)",
+    whiteSpace: "pre-wrap",
   },
   ".cm-lp-table-widget th": {
     background: "var(--bg-subtle)",

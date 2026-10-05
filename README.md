@@ -47,6 +47,11 @@ git push origin v0.2.0
 | ⌘/Ctrl + S | Save (Save As for untitled documents) |
 | ⌘/Ctrl + Shift + S | Save As |
 | ⌘/Ctrl + Shift + E | Show / hide the sidebar |
+| ⌘/Ctrl + Shift + T | Show / hide the outline |
+| ⌘/Ctrl + Alt + [ / ] | Fold / unfold the section at the cursor |
+| ⌘/Ctrl + Alt + 1…6 | Collapse to heading level 1…6 |
+| ⌘/Ctrl + Alt + 0 | Unfold all |
+| ⌘/Ctrl + Shift + F | Focus mode: off → paragraph → section |
 | ⌘/Ctrl + \ | Toggle live rendering / source mode |
 | ⌘/Ctrl + F | Find and replace |
 | ⌘/Ctrl + , | Settings |
@@ -66,7 +71,13 @@ git push origin v0.2.0
 
 Anything that cannot be rendered stays as written: a formula KaTeX rejects (underlined), a diagram Mermaid cannot parse, a reference to an undefined label, an unknown emoji name. KaTeX, Mermaid and the emoji list load the first time a document needs them.
 
+**Autosave:** a document that has a file is saved a second after you stop typing, when you switch to another app, and when you close the window or quit; the status bar shows when it was last saved. An untitled document is never written on its own; closing or quitting (⌘Q included) asks before discarding it.
+
 **Appearance:** Settings → Appearance sets the theme (follow the system, light or dark), the text and code fonts, font size, line height and text width. Changes apply as you make them and are kept per machine.
+
+**Outline and folding:** the Outline tab in the sidebar lists the headings; click one to jump to it, and the section you are reading is highlighted as you scroll. Hover a heading and click the chevron on its left to fold its section; a folded section shows how many lines it hides, and clicking that (or moving the cursor into it) unfolds it. Folds are not saved.
+
+**Focus mode (experimental):** dims everything except the paragraph or section being read, following the cursor while editing and a reading line about a third down the window while scrolling.
 
 **Folder sidebar:** open a folder to browse its subfolders and Markdown files (hidden entries are skipped; folders load lazily as you expand them). Right-click for New File, New Folder, Rename (inline), Move to Trash, and Reveal in Finder / Explorer. The tree follows changes made on disk, and the last folder, expanded folders, and sidebar width are restored on the next launch. Switching files from the sidebar saves unsaved changes first; an untitled document asks before discarding.
 

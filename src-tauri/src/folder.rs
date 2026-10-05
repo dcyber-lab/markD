@@ -16,7 +16,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::{io_err, open_path, track, AppState, DocInfo, MD_EXTENSIONS};
+use crate::{io_err, open_path, track, AppState, DocInfo};
 
 const STATE_FILE: &str = "state.json";
 
@@ -129,13 +129,6 @@ fn valid_name(name: &str) -> Result<&str, String> {
     Ok(name)
 }
 
-fn is_markdown(name: &str) -> bool {
-    Path::new(name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| MD_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
-}
-
 #[tauri::command]
 pub(crate) async fn open_folder(app: AppHandle) -> Result<Option<FolderInfo>, String> {
     let Some(picked) = app.dialog().file().blocking_pick_folder() else {
@@ -145,7 +138,7 @@ pub(crate) async fn open_folder(app: AppHandle) -> Result<Option<FolderInfo>, St
     open_folder_at(&app, &path).map(Some)
 }
 
-/// Folders and Markdown files directly inside `path`, folders first. Hidden entries are skipped.
+/// Folders and files directly inside `path`, folders first. Hidden entries are skipped.
 #[tauri::command]
 pub(crate) async fn list_dir(state: State<'_, AppState>, path: String) -> Result<Vec<Entry>, String> {
     let (_, dir) = inside_folder(&state, &path)?;
@@ -156,7 +149,7 @@ pub(crate) async fn list_dir(state: State<'_, AppState>, path: String) -> Result
             let name = e.file_name().to_string_lossy().into_owned();
             let path = e.path();
             let is_dir = path.is_dir();
-            (!name.starts_with('.') && (is_dir || is_markdown(&name))).then(|| Entry {
+            (!name.starts_with('.')).then(|| Entry {
                 name,
                 path: path.display().to_string(),
                 is_dir,

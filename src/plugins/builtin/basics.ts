@@ -4,6 +4,7 @@ import { EditorView, WidgetType } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { MarkdownConfig } from "@lezer/markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { headingText } from "../../markdown-headings";
 import { hasModKey } from "../../platform";
 import type { MarkdPlugin, PluginApp } from "../api";
 import { linkDestination } from "./references";
@@ -92,29 +93,6 @@ function decodeEntity(entity: string): string | null {
   entityDecoder.innerHTML = entity;
   const text = entityDecoder.value;
   return text === entity ? null : text;
-}
-
-/** Text of a heading without its markup, as GitHub uses for anchors. */
-const HEADING_MARKUP = new Set([
-  "HeaderMark", "EmphasisMark", "StrikethroughMark", "HighlightMark", "CodeMark", "LinkMark", "URL", "LinkTitle",
-  "LinkLabel",
-]);
-
-function headingText(state: EditorState, from: number, to: number): string {
-  let text = "";
-  let pos = from;
-  syntaxTree(state).iterate({
-    from,
-    to,
-    enter(node) {
-      if (node.from < from || !HEADING_MARKUP.has(node.name)) return;
-      if (node.from > pos) text += state.sliceDoc(pos, node.from);
-      pos = Math.max(pos, node.to);
-      return false;
-    },
-  });
-  if (pos < to) text += state.sliceDoc(pos, to);
-  return text.trim();
 }
 
 /** GitHub-style anchor: lowercase, punctuation dropped, spaces to hyphens. */

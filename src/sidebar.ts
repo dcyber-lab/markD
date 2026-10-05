@@ -6,9 +6,12 @@ import { revealLabel } from "./platform";
 
 const WIDTH_KEY = "markd.sidebar.width";
 const HIDDEN_KEY = "markd.sidebar.hidden";
+const TAB_KEY = "markd.sidebar.tab";
 const EXPANDED_KEY = "markd.sidebar.expanded:";
 const MIN_WIDTH = 160;
 const MAX_WIDTH = 480;
+
+export type SidebarTab = "files" | "outline";
 
 type Editing = { kind: "rename"; path: string } | { kind: "new-file" | "new-folder"; dir: string };
 
@@ -41,7 +44,7 @@ function savePref(key: string, value: unknown) {
   }
 }
 
-/** The folder tree. Folders are listed lazily as they are expanded. */
+/** The folder tree, and a tab for the outline. Folders are listed lazily as they are expanded. */
 export class Sidebar {
   private folder: FolderInfo | null = null;
   private listings = new Map<string, Entry[]>();
@@ -64,6 +67,7 @@ export class Sidebar {
     this.nameEl = el.querySelector<HTMLElement>("#folder-name")!;
 
     el.querySelector("#open-folder")!.addEventListener("click", () => handlers.run(handlers.openFolder));
+    el.querySelector("#switch-folder")!.addEventListener("click", () => handlers.run(handlers.openFolder));
     el.querySelector("#new-file")!.addEventListener("click", () =>
       handlers.run(() => this.startCreate("new-file", this.folder!.root)),
     );
@@ -80,6 +84,12 @@ export class Sidebar {
       e.preventDefault();
       if (this.folder) handlers.run(() => this.showMenu(this.entryAt(e.target)));
     });
+
+    el.querySelector("#sidebar-tabs")!.addEventListener("click", (e) => {
+      const tab = (e.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
+      if (tab) this.showTab(tab as SidebarTab);
+    });
+    this.showTab(loadPref<SidebarTab>(TAB_KEY, "files") === "outline" ? "outline" : "files");
 
     this.setWidth(loadPref(WIDTH_KEY, 240));
     el.hidden = loadPref(HIDDEN_KEY, false);
@@ -126,6 +136,22 @@ export class Sidebar {
   show() {
     this.el.hidden = false;
     savePref(HIDDEN_KEY, false);
+  }
+
+  get tab(): SidebarTab {
+    return this.el.dataset.tab as SidebarTab;
+  }
+
+  showTab(tab: SidebarTab) {
+    this.el.dataset.tab = tab;
+    for (const button of this.el.querySelectorAll<HTMLElement>("#sidebar-tabs [data-tab]")) {
+      button.classList.toggle("is-active", button.dataset.tab === tab);
+    }
+    savePref(TAB_KEY, tab);
+  }
+
+  get visible(): boolean {
+    return !this.el.hidden;
   }
 
   toggleVisible() {
