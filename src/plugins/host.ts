@@ -19,14 +19,33 @@ import {
 
 type Listener = (payload: never) => void;
 
+const PUNCTUATION_CODES: Record<string, string> = {
+  "[": "BracketLeft",
+  "]": "BracketRight",
+  "\\": "Backslash",
+  ",": "Comma",
+  ".": "Period",
+  "=": "Equal",
+  "-": "Minus",
+};
+
+/** The physical key code for a key name, e.g. `KeyA`, `Digit1`, `BracketLeft`. */
+function keyCode(name: string): string | undefined {
+  if (/^[a-z]$/.test(name)) return `Key${name.toUpperCase()}`;
+  if (/^[0-9]$/.test(name)) return `Digit${name}`;
+  return PUNCTUATION_CODES[name];
+}
+
 /** Does a CodeMirror-style key such as `Mod-Shift-o` match this event? */
 function keyMatches(key: string, e: KeyboardEvent): boolean {
   const parts = key.split(/-(?!$)/);
   const name = parts.pop()!.toLowerCase();
   const mods = new Set(parts.map((p) => p.toLowerCase()));
   const mod = mods.has("mod");
+  // Option on macOS changes the character (⌥[ types “), so with Alt the physical key counts too.
+  const keyed = e.key.toLowerCase() === name || (e.altKey && e.code === keyCode(name));
   return (
-    e.key.toLowerCase() === name &&
+    keyed &&
     e.metaKey === (mods.has("meta") || (mod && isMac)) &&
     e.ctrlKey === (mods.has("ctrl") || (mod && !isMac)) &&
     e.altKey === mods.has("alt") &&

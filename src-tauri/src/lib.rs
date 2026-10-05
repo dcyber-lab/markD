@@ -246,9 +246,39 @@ async fn save_file_as(app: AppHandle, request: Request<'_>) -> Result<Option<Doc
     track(&app, path, content.to_owned()).map(Some)
 }
 
+#[cfg(target_os = "macos")]
+const QUIT_MENU_ID: &str = "markd.quit";
+
+/// The default macOS menu with its own Quit. The default Quit ends the app at once, skipping the
+/// close request in which the page saves the document, or asks before discarding an untitled one.
+#[cfg(target_os = "macos")]
+fn app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem};
+
+    let menu = Menu::default(app)?;
+    if let Some(app_menu) = menu.items()?.first().and_then(|item| item.as_submenu()) {
+        // Quit is the last item of the app menu.
+        let last = app_menu.items()?.len().saturating_sub(1);
+        app_menu.remove_at(last)?;
+        let quit = format!("Quit {}", app.package_info().name);
+        app_menu.append(&MenuItem::with_id(app, QUIT_MENU_ID, quit, true, Some("CmdOrCtrl+Q"))?)?;
+    }
+    Ok(menu)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(app_menu).on_menu_event(|app, event| {
+        if event.id().as_ref() == QUIT_MENU_ID {
+            // The app quits once its last window is closed.
+            for window in app.webview_windows().values() {
+                let _ = window.close();
+            }
+        }
+    });
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
